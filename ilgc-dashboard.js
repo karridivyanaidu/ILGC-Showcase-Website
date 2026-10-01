@@ -1906,51 +1906,49 @@ document.getElementById("createProjectBtn").addEventListener("click", openCreate
 /* ======================================================
    RENDER: NOTIFICATIONS
 ====================================================== */
-
 function buildNotifications() {
     const notifications = [];
 
     mentorInterestData
-    .filter((i) => i.status === "Pending")
-    .forEach((i) => {
-        mentorInterestData
-    .filter((i) => i.status === "Pending")
-    .forEach((i) => {
-        notifications.push({
-            icon: "👤",
-            date: (i.submittedAt || "").slice(0, 10),
-            text:
-                `<strong>${i.studentName}</strong> has expressed interest in ` +
-                `<strong>${i.projectTitle}</strong>.`
+        .filter((i) => i.status === "Pending")
+        .forEach((i) => {
+            notifications.push({
+                icon: "👤",
+                date: (i.submittedAt || "").slice(0, 10),
+                text:
+                    `<strong>${i.studentName}</strong> has expressed interest in ` +
+                    `<strong>${i.projectTitle}</strong>.`
+            });
         });
-    });
 
-    getProposals().filter((i) => i.status === "Pending").forEach((i) => {
-        notifications.push({
-            icon: "💡",
-            date: i.proposedDate,
-            text: `A new project has been proposed in <strong>${i.domain}</strong> — "${i.title}".`
+    getProposals()
+        .filter((i) => i.status === "Pending")
+        .forEach((i) => {
+            notifications.push({
+                icon: "💡",
+                date: i.proposedDate,
+                text: `A new project has been proposed in <strong>${i.domain}</strong> — "${i.title}".`
+            });
         });
-    });
 
     getAllReports()
-    .filter(
-        (r) =>
-            r.status === "Submitted" ||
-            r.status === "Under Review" ||
-            r.status === "Resubmitted"
-    )
-    .forEach((r) => {
-        const project = mentorGroups.find((p) => p.id === r.projectId);
+        .filter(
+            (r) =>
+                r.status === "Submitted" ||
+                r.status === "Under Review" ||
+                r.status === "Resubmitted"
+        )
+        .forEach((r) => {
+            const project = mentorGroups.find((p) => p.id === r.projectId);
 
-        notifications.push({
-            icon: "📄",
-            date: r.submittedDate,
-            text: `${r.submittedBy} submitted a ${r.reportType.toLowerCase()} for <strong>${
-                project ? project.title : "a project"
-            }</strong>`,
+            notifications.push({
+                icon: "📄",
+                date: r.submittedDate,
+                text: `${r.submittedBy} submitted a ${r.reportType.toLowerCase()} for <strong>${
+                    project ? project.title : "a project"
+                }</strong>`,
+            });
         });
-    });
 
     return notifications
         .filter((n) => n.date)
