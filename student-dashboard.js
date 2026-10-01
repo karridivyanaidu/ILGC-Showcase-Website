@@ -570,28 +570,144 @@ console.log(
 }
 
 /* ======================================================
-   INTERESTS STORAGE
-   Stored per-user in localStorage (see data.js) as a
-   stand-in for the backend: [{ projectId, status, submittedAt }]
+   INTERESTS
+   Stored in Supabase: expressions_of_interest
 ====================================================== */
 
 let interests = [];
 
-function getInterest(projectId) {
-    return interests.find((i) => i.projectId === projectId) || null;
+/* Convert Supabase enum values into the UI format */
+function formatInterestStatus(status) {
+    if (!status) return "Pending";
+
+    return String(status)
+        .charAt(0)
+        .toUpperCase() +
+        String(status).slice(1).toLowerCase();
 }
 
-function submitInterest(projectId) {
-    if (getInterest(projectId)) return;
+/* Find this student's interest for a specific project */
+function getInterest(projectId) {
+    return interests.find(
+        (interest) => interest.projectId === projectId
+    ) || null;
+}
 
-    interests.push({
+/* ------------------------------------------------------
+   LOAD MY INTERESTS FROM SUPABASE
+------------------------------------------------------ */
+
+async function loadStudentInterests() {
+    console.log("Loading student interests for:", userId);
+
+    const { data, error } =
+        await window.supabaseClient
+            .from("expressions_of_interest")
+            .select(`
+                student_email,
+                project_code,
+                status,
+                message,
+                submitted_at,
+                reviewed_by,
+                reviewed_at,
+                review_comment
+            `)
+            .eq("student_email", userId)
+            .order("submitted_at", {
+                ascending: false
+            });
+
+    if (error) {
+        console.error(
+            "Could not load student interests:",
+            error
+        );
+
+        interests = [];
+        return;
+    }
+
+    console.log(
+        "Student interests from Supabase:",
+        data
+    );
+
+    interests = (data || []).map((row) => ({
+        projectId: row.project_code,
+
+        status: formatInterestStatus(row.status),
+
+        message: row.message || "",
+
+        submittedAt: row.submitted_at,
+
+        respondedAt: row.reviewed_at,
+
+        reviewedBy: row.reviewed_by || "",
+
+        reviewComment: row.review_comment || ""
+    }));
+}
+
+/* ------------------------------------------------------
+   SUBMIT INTEREST
+------------------------------------------------------ */
+
+async function submitInterest(projectId) {
+    if (!projectId) return;
+
+    /* Prevent duplicate submission in the UI */
+    if (getInterest(projectId)) {
+        showToast("You have already expressed interest in this project.");
+        return;
+    }
+
+    console.log(
+        "Submitting interest:",
         projectId,
-        status: "Pending",
-        submittedAt: new Date().toISOString()
-    });
+        "for student:",
+        userId
+    );
 
-    saveInterestsFor(userId, interests);
+    const { error } =
+        await window.supabaseClient
+            .from("expressions_of_interest")
+            .insert({
+                student_email: userId,
+                project_code: projectId,
+                status: "pending"
+            });
+
+    if (error) {
+        console.error(
+            "Could not submit expression of interest:",
+            error
+        );
+
+        /* PostgreSQL duplicate-key error */
+        if (error.code === "23505") {
+            showToast(
+                "You have already expressed interest in this project."
+            );
+
+            await loadStudentInterests();
+            renderAll();
+            return;
+        }
+
+        showToast(
+            "Could not submit your interest. Please try again."
+        );
+
+        return;
+    }
+
+    /* Reload from Supabase so the UI reflects the real database */
+    await loadStudentInterests();
+
     showToast("Interest submitted ✓");
+
     renderAll();
 }
 
@@ -621,15 +737,19 @@ function simulateFacultyResponse(projectId) {
    MY PROJECT (derived from an accepted interest)
 ====================================================== */
 
+/* ======================================================
+   MY PROJECT
+   Actual membership comes from project_members
+====================================================== */
+
 function getMyProject() {
-    const accepted = interests.find((i) => i.status === "Accepted");
-    if (!accepted) return null;
-    return getAllProjects().find((p) => p.id === accepted.projectId) || null;
+    return studentProjects.length > 0
+        ? studentProjects[0]
+        : null;
 }
 
 function getMyProjects() {
-    const acceptedIds = interests.filter((i) => i.status === "Accepted").map((i) => i.projectId);
-    return getAllProjects().filter((p) => acceptedIds.includes(p.id));
+    return studentProjects || [];
 }
 
 
@@ -863,19 +983,51 @@ function renderHome() {
 function actionButtonHtml(project) {
     const interest = getInterest(project.id);
 
+    /* Student has not expressed interest */
     if (!interest) {
-        return `<button class="btn btn-primary" data-express="${project.id}">Express Interest</button>`;
+        return `
+            <button
+                class="btn btn-primary"
+                data-express="${project.id}">
+                Express Interest
+            </button>
+        `;
     }
 
+    /* Waiting for mentor */
     if (interest.status === "Pending") {
-        return `<button class="btn btn-pending" data-simulate="${project.id}" title="Demo: click to simulate faculty response">Pending ✓</button>`;
+        return `
+            <button
+                class="btn btn-pending"
+                disabled>
+                Interest Pending ✓
+            </button>
+        `;
     }
 
+    /* Mentor accepted */
     if (interest.status === "Accepted") {
-        return `<button class="btn btn-accepted" disabled>Accepted ✓</button>`;
+        return `
+            <button
+                class="btn btn-accepted"
+                disabled>
+                Accepted ✓
+            </button>
+        `;
     }
 
-    return `<button class="btn btn-rejected" disabled>Not selected</button>`;
+    /* Mentor rejected */
+    if (interest.status === "Rejected") {
+        return `
+            <button
+                class="btn btn-rejected"
+                disabled>
+                Not selected
+            </button>
+        `;
+    }
+
+    return "";
 }
 
 function studentDiscoverMentors() {
@@ -1347,41 +1499,47 @@ document.getElementById("discoverMentorSelect").addEventListener("change", (e) =
 
 document.addEventListener("click", (e) => {
     const expressBtn = e.target.closest("[data-express]");
+
     if (expressBtn) {
         submitInterest(expressBtn.dataset.express);
         return;
     }
 
-    const simulateBtn = e.target.closest("[data-simulate]");
-    if (simulateBtn) {
-        simulateFacultyResponse(simulateBtn.dataset.simulate);
-        return;
-    }
-
     const emailProf = e.target.closest("[data-email-prof]");
+
     if (emailProf) {
         emailProfessor(emailProf.dataset.emailProf);
         return;
     }
 
     const openBtn = e.target.closest("[data-open]");
+
     if (openBtn) {
         openModal(openBtn.dataset.open);
         return;
     }
 
     const spCreate = e.target.closest("[data-sp-create]");
+
     if (spCreate) {
-        createSharePoint(spCreate.dataset.spCreate, studentName);
+        createSharePoint(
+            spCreate.dataset.spCreate,
+            studentName
+        );
+
         showToast("SharePoint workspace created ✓");
         renderMyProjectsFull();
         return;
     }
 
     const spRemove = e.target.closest("[data-sp-remove]");
+
     if (spRemove) {
-        const [projectId, fileId] = spRemove.dataset.spRemove.split("|");
+        const [projectId, fileId] =
+            spRemove.dataset.spRemove.split("|");
+
         removeSharePointFile(projectId, fileId);
+
         showToast("Report removed");
         renderMyProjectsFull();
         return;
@@ -1821,6 +1979,8 @@ renderProfile();
 async function initStudentDashboard() {
     await loadStudentProfile();
 
+    await loadStudentInterests();
+
     studentProjects = await loadStudentProjects();
 
     await loadDiscoverProjects();
@@ -1832,6 +1992,7 @@ async function initStudentDashboard() {
     ]);
 
     renderDiscoverChips();
+
     renderAll();
 }
 
