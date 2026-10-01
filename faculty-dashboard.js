@@ -41,6 +41,7 @@ let allProjectsData = [];
 let interestedStudentsData = [];
 let myProjectMembersData = [];
 let studentProfilesData = [];
+let allDomainNames = [];
 
 let projectsActiveStatus = "All";
 let projectsActiveSemester = "All";
@@ -1749,16 +1750,30 @@ function openStudentModal(email) {
    DISCOVER PROJECTS
 ====================================================== */
 
+function escapeHtml(text) {
+
+    return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+
 function discoverDomains() {
+
+    const fromProjects =
+        allProjectsData.flatMap(
+            (project) =>
+                project.domains || []
+        );
 
     return [
         "All",
-        ...new Set(
-            allProjectsData.flatMap(
-                (project) =>
-                    project.domains || []
-            )
-        )
+        ...new Set([
+            ...allDomainNames,
+            ...fromProjects
+        ])
     ];
 }
 
@@ -1809,10 +1824,10 @@ function renderDiscoverChips() {
                 (domain) => `
                     <button
                         class="chip"
-                        data-discover-domain="${domain}"
+                        data-discover-domain="${escapeHtml(domain)}"
                         data-active="${domain === discoverDomain}"
                     >
-                        ${domain}
+                        ${escapeHtml(domain)}
                     </button>
                 `
             ).join("");
@@ -2356,23 +2371,257 @@ function renderUnmanaged() {
 }
 
 
-function renderTags() {
+/* ======================================================
+   PROJECT TAGS  (Supabase table: project_domains)
+====================================================== */
+
+async function renderTags() {
 
     const list =
-        document.getElementById(
-            "tagManageList"
-        );
+        document.getElementById("tagManageList");
 
     if (!list) {
         return;
     }
 
-    list.innerHTML = `
-        <p class="empty-state">
-            Project tags will be connected to Supabase next.
-        </p>
-    `;
+    list.innerHTML =
+        '<p class="empty-state">Loading tags...</p>';
+
+    const { data, error } =
+        await window.supabaseClient
+            .from("project_domains")
+            .select("domain_id, name")
+            .order("name");
+
+    if (error) {
+        console.error(
+            "Could not load tags:",
+            error
+        );
+
+        list.innerHTML =
+            '<p class="empty-state">Could not load tags.</p>';
+
+        return;
+    }
+
+    allDomainNames =
+        (data || []).map((tag) => tag.name);
+
+    if (
+        discoverDomain !== "All" &&
+        !allDomainNames.includes(discoverDomain)
+    ) {
+        discoverDomain = "All";
+    }
+
+    renderDiscoverChips();
+    renderDiscover();
+
+    list.innerHTML = "";
+
+    if (!data || !data.length) {
+        list.innerHTML =
+            '<p class="empty-state">No tags yet. Add your first one above.</p>';
+
+        return;
+    }
+
+    data.forEach((tag) => {
+
+        const row =
+            document.createElement("div");
+
+        row.style.cssText =
+            "display:flex;align-items:center;" +
+            "justify-content:space-between;" +
+            "gap:12px;padding:12px 16px;" +
+            "margin-bottom:10px;background:#fff;" +
+            "border:1px solid #DCE8EA;" +
+            "border-radius:14px;";
+
+        const label =
+            document.createElement("span");
+
+        label.textContent = tag.name;
+        label.style.fontWeight = "600";
+
+        const actions =
+            document.createElement("div");
+
+        actions.style.cssText =
+            "display:flex;gap:8px;";
+
+        const editBtn =
+            document.createElement("button");
+
+        editBtn.type = "button";
+        editBtn.className = "btn btn-secondary";
+        editBtn.textContent = "Edit";
+        editBtn.addEventListener(
+            "click",
+            () => renameTag(
+                tag.domain_id,
+                tag.name
+            )
+        );
+
+        const delBtn =
+            document.createElement("button");
+
+        delBtn.type = "button";
+        delBtn.className = "btn btn-danger";
+        delBtn.textContent = "Delete";
+        delBtn.addEventListener(
+            "click",
+            () => deleteTag(
+                tag.domain_id,
+                tag.name
+            )
+        );
+
+        actions.append(editBtn, delBtn);
+        row.append(label, actions);
+        list.appendChild(row);
+    });
 }
+
+
+async function addTag(name) {
+
+    const { error } =
+        await window.supabaseClient
+            .from("project_domains")
+            .insert({ name });
+
+    if (error) {
+        console.error(
+            "Could not add tag:",
+            error
+        );
+
+        showToast(
+            error.code === "23505"
+                ? "That tag already exists."
+                : "Could not add tag."
+        );
+
+        return false;
+    }
+
+    showToast("Tag added.");
+    renderTags();
+
+    return true;
+}
+
+
+async function renameTag(id, oldName) {
+
+    const input =
+        prompt("Rename tag:", oldName);
+
+    const name =
+        input ? input.trim() : "";
+
+    if (!name || name === oldName) {
+        return;
+    }
+
+    const { error } =
+        await window.supabaseClient
+            .from("project_domains")
+            .update({ name })
+            .eq("domain_id", id);
+
+    if (error) {
+        console.error(
+            "Could not rename tag:",
+            error
+        );
+
+        showToast(
+            error.code === "23505"
+                ? "A tag with that name already exists."
+                : "Could not rename tag."
+        );
+
+        return;
+    }
+
+    showToast("Tag renamed.");
+    renderTags();
+}
+
+
+async function deleteTag(id, name) {
+
+    if (!confirm(
+        'Delete the tag "' + name + '"?'
+    )) {
+        return;
+    }
+
+    const { error } =
+        await window.supabaseClient
+            .from("project_domains")
+            .delete()
+            .eq("domain_id", id);
+
+    if (error) {
+        console.error(
+            "Could not delete tag:",
+            error
+        );
+
+        showToast(
+            error.code === "23503"
+                ? "This tag is used by projects, so it can't be deleted."
+                : "Could not delete tag."
+        );
+
+        return;
+    }
+
+    showToast("Tag deleted.");
+    renderTags();
+}
+
+
+(function setupTagForm() {
+
+    const form =
+        document.getElementById("newTagForm");
+
+    const input =
+        document.getElementById("newTagInput");
+
+    if (!form || !input) {
+        return;
+    }
+
+    form.addEventListener(
+        "submit",
+        async (event) => {
+
+            event.preventDefault();
+
+            const name =
+                input.value.trim();
+
+            if (!name) {
+                return;
+            }
+
+            const ok =
+                await addTag(name);
+
+            if (ok) {
+                input.value = "";
+            }
+        }
+    );
+})();
 
 
 /* ======================================================
