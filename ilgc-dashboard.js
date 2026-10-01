@@ -51,6 +51,7 @@ async function loadMentorName() {
 ====================================================== */
 
 let mentorGroups = [];
+let mentorInterestData = [];
 
 async function loadMentorGroups() {
     console.log("Loading groups for mentor:", userId);
@@ -241,6 +242,281 @@ async function loadMentorGroups() {
     console.log("Final mentor groups:", mentorGroups);
 }
 
+/* ======================================================
+   LOAD STUDENT INTERESTS FROM SUPABASE
+   Only interests for projects assigned to this mentor
+====================================================== */
+
+async function loadMentorInterests() {
+    console.log("Loading student interests for mentor:", userId);
+
+    /* --------------------------------------------------
+       1. Get projects assigned to this mentor
+    -------------------------------------------------- */
+
+    const { data: assignments, error: assignmentError } =
+        await window.supabaseClient
+            .from("project_mentors")
+            .select("project_code")
+            .eq("mentor_email", userId);
+
+    if (assignmentError) {
+        console.error(
+            "Could not load mentor project assignments:",
+            assignmentError
+        );
+
+        mentorInterestData = [];
+        return;
+    }
+
+    const projectCodes = [
+        ...new Set(
+            (assignments || [])
+                .map((row) => row.project_code)
+                .filter(Boolean)
+        )
+    ];
+
+    console.log(
+        "Projects assigned to mentor:",
+        projectCodes
+    );
+
+    if (projectCodes.length === 0) {
+        mentorInterestData = [];
+        return;
+    }
+
+    /* --------------------------------------------------
+       2. Get expressions of interest
+    -------------------------------------------------- */
+
+    const { data: interestRows, error: interestError } =
+        await window.supabaseClient
+            .from("expressions_of_interest")
+            .select(`
+                student_email,
+                project_code,
+                status,
+                message,
+                submitted_at,
+                reviewed_by,
+                reviewed_at,
+                review_comment
+            `)
+            .in("project_code", projectCodes)
+            .order("submitted_at", {
+                ascending: false
+            });
+
+    if (interestError) {
+        console.error(
+            "Could not load expressions of interest:",
+            interestError
+        );
+
+        mentorInterestData = [];
+        return;
+    }
+
+    console.log(
+        "Expressions of interest:",
+        interestRows
+    );
+
+    if (!interestRows || interestRows.length === 0) {
+        mentorInterestData = [];
+        return;
+    }
+
+    /* --------------------------------------------------
+       3. Get student emails
+    -------------------------------------------------- */
+
+    const studentEmails = [
+        ...new Set(
+            interestRows
+                .map((row) => row.student_email)
+                .filter(Boolean)
+        )
+    ];
+
+    /* --------------------------------------------------
+       4. Get student names from users
+    -------------------------------------------------- */
+
+    const { data: users, error: usersError } =
+        await window.supabaseClient
+            .from("users")
+            .select("email, name")
+            .in("email", studentEmails);
+
+    if (usersError) {
+        console.error(
+            "Could not load interested student names:",
+            usersError
+        );
+    }
+
+    const userMap = new Map(
+        (users || []).map((user) => [
+            user.email,
+            user
+        ])
+    );
+
+    /* --------------------------------------------------
+       5. Get student profile information
+    -------------------------------------------------- */
+
+    const { data: profiles, error: profilesError } =
+        await window.supabaseClient
+            .from("student_profiles")
+            .select(`
+                email,
+                roll_number,
+                program,
+                department,
+                semester,
+                bio,
+                skills,
+                interests,
+                github_url,
+                linkedin_url,
+                portfolio_url
+            `)
+            .in("email", studentEmails);
+
+    if (profilesError) {
+        console.error(
+            "Could not load interested student profiles:",
+            profilesError
+        );
+    }
+
+    const profileMap = new Map(
+        (profiles || []).map((profile) => [
+            profile.email,
+            profile
+        ])
+    );
+
+    /* --------------------------------------------------
+       6. Get project details
+    -------------------------------------------------- */
+
+    const { data: projects, error: projectsError } =
+        await window.supabaseClient
+            .from("projects")
+            .select(`
+                project_code,
+                title,
+                description,
+                summary
+            `)
+            .in("project_code", projectCodes);
+
+    if (projectsError) {
+        console.error(
+            "Could not load interested project details:",
+            projectsError
+        );
+    }
+
+    const projectMap = new Map(
+        (projects || []).map((project) => [
+            project.project_code,
+            project
+        ])
+    );
+
+    /* --------------------------------------------------
+       7. Build final data
+    -------------------------------------------------- */
+
+    mentorInterestData = interestRows.map((row) => {
+        const user = userMap.get(row.student_email) || {};
+        const profile = profileMap.get(row.student_email) || {};
+        const project = projectMap.get(row.project_code) || {};
+
+        return {
+            studentEmail: row.student_email,
+
+            studentName:
+                user.name ||
+                row.student_email,
+
+            rollNumber:
+                profile.roll_number || "",
+
+            program:
+                profile.program || "",
+
+            department:
+                profile.department || "",
+
+            semester:
+                profile.semester || "",
+
+            bio:
+                profile.bio || "",
+
+            skills:
+                profile.skills || [],
+
+            interests:
+                profile.interests || [],
+
+            githubUrl:
+                profile.github_url || "",
+
+            linkedinUrl:
+                profile.linkedin_url || "",
+
+            portfolioUrl:
+                profile.portfolio_url || "",
+
+            projectCode:
+                row.project_code,
+
+            projectTitle:
+                project.title ||
+                row.project_code,
+
+            projectDescription:
+                project.description ||
+                project.summary ||
+                "",
+
+            status:
+                String(row.status || "pending")
+                    .charAt(0)
+                    .toUpperCase() +
+                String(row.status || "pending").slice(1).toLowerCase(),
+
+            message:
+                row.message || "",
+
+            submittedAt:
+                row.submitted_at,
+
+            reviewedBy:
+                row.reviewed_by || "",
+
+            reviewedAt:
+                row.reviewed_at,
+
+            reviewComment:
+                row.review_comment || ""
+        };
+    });
+
+    console.log(
+        "Final mentor interest data:",
+        mentorInterestData
+    );
+}
 
 /* ======================================================
    BADGE HELPERS
@@ -430,7 +706,10 @@ function renderHome() {
 
     const groups = mentorGroups || [];
     const activeProjects = mentorGroups.length;
-    const pendingInterests = getAllInterestsAcrossStudents().filter((i) => i.status === "Pending");
+    const pendingInterests =
+    mentorInterestData.filter(
+        (i) => i.status === "Pending"
+    );
     const pendingProposals = getProposals().filter((i) => i.status === "Pending" || i.status === "Needs Revision");
     const reportsToReview = getAllReports().filter((r) => r.status === "Submitted" || r.status === "Under Review" || r.status === "Resubmitted");
 
@@ -692,54 +971,92 @@ function ilgcSharePointViewHtml(projectId) {
    RENDER: STUDENT INTEREST (institute-wide)
 ====================================================== */
 
-function renderInterest() {
-    const rows = getAllInterestsAcrossStudents().sort(
-        (a, b) => new Date(b.submittedAt) - new Date(a.submittedAt)
-    );
+/* ======================================================
+   RENDER: STUDENT INTEREST
+====================================================== */
 
-    const container = document.getElementById("interestTable");
-    const empty = document.getElementById("interestEmpty");
+function renderInterest() {
+    const container =
+        document.getElementById("interestTable");
+
+    const empty =
+        document.getElementById("interestEmpty");
+
+    if (!container) return;
+
+    const rows = mentorInterestData || [];
 
     if (rows.length === 0) {
         container.innerHTML = "";
-        empty.classList.remove("hidden");
+
+        if (empty) {
+            empty.classList.remove("hidden");
+        }
+
         return;
     }
 
-    empty.classList.add("hidden");
+    if (empty) {
+        empty.classList.add("hidden");
+    }
 
-    const allProjects = getAllProjects();
+    const esc = (value) =>
+        String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
 
-    injectInterestTableStyles();
-    container.classList.add("interest-tbl");
+    const rowsHtml = rows.map((interest) => {
 
-    const escI = (v) => String(v == null ? "" : v)
-        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-    const bodyRows = rows.map((interest) => {
-        const project = allProjects.find((p) => p.id === interest.projectId);
-        const student = deriveStudentProfile(interest.studentUserId);
-
-        const otherInterests = loadInterestsFor(interest.studentUserId);
-        const acceptedElsewhere = otherInterests.find((i) => i.status === "Accepted");
-        const currentProject = acceptedElsewhere
-            ? (allProjects.find((p) => p.id === acceptedElsewhere.projectId) || {}).title
-            : "None";
+        const semester =
+            interest.semester !== ""
+                ? `Sem ${interest.semester}`
+                : "—";
 
         return `
             <div class="itbl-row">
-                <span class="itbl-student">${escI(student.name)}</span>
-                <span class="itbl-muted">Sem ${escI(student.semester)}</span>
-                <span class="itbl-muted">${escI(currentProject || "None")}</span>
-                <span class="itbl-strong">${project ? escI(project.title) : "—"}</span>
-                <span><span class="badge ${interestBadgeClass(interest.status)}">${escI(interest.status)}</span></span>
-                <span class="itbl-action"><button class="itbl-view" data-interest-view="${interest.studentUserId}|${interest.projectId}">View</button></span>
+
+                <span class="itbl-student">
+                    ${esc(interest.studentName)}
+                </span>
+
+                <span class="itbl-muted">
+                    ${esc(semester)}
+                </span>
+
+                <span class="itbl-muted">
+                    None
+                </span>
+
+                <span class="itbl-strong">
+                    ${esc(interest.projectTitle)}
+                </span>
+
+                <span>
+                    <span class="badge ${interestBadgeClass(interest.status)}">
+                        ${esc(interest.status)}
+                    </span>
+                </span>
+
+                <span class="itbl-action">
+                    <button
+                        class="itbl-view"
+                        data-interest-view="${esc(interest.studentEmail)}|${esc(interest.projectCode)}">
+                        View
+                    </button>
+                </span>
+
             </div>
         `;
     }).join("");
 
+    container.classList.add("interest-tbl");
+
     container.innerHTML = `
         <div class="itbl-scroll">
+
             <div class="itbl-head">
                 <span>Student</span>
                 <span>Semester</span>
@@ -748,53 +1065,182 @@ function renderInterest() {
                 <span>Status</span>
                 <span class="itbl-action">Action</span>
             </div>
-            ${bodyRows}
+
+            ${rowsHtml}
+
         </div>
     `;
-}
 
-function openInterestModal(studentUserId, projectId) {
-    const interest = getAllInterestsAcrossStudents()
-        .find((i) => String(i.studentUserId) === String(studentUserId) && String(i.projectId) === String(projectId));
+    injectInterestTableStyles();
+}
+function openInterestModal(studentEmail, projectCode) {
+
+    const interest =
+        mentorInterestData.find(
+            (item) =>
+                item.studentEmail === studentEmail &&
+                item.projectCode === projectCode
+        );
+
     if (!interest) return;
 
-    const allProjects = getAllProjects();
-    const project = allProjects.find((p) => p.id === projectId);
-    const student = deriveStudentProfile(studentUserId);
-    const accepted = loadInterestsFor(studentUserId).find((i) => i.status === "Accepted");
-    const currentProject = accepted ? (allProjects.find((p) => p.id === accepted.projectId) || {}).title : "None";
+    const skills =
+        Array.isArray(interest.skills) &&
+        interest.skills.length
+            ? interest.skills.join(", ")
+            : "Not provided";
 
-    const actions = interest.status === "Pending"
-        ? `
-            <button class="btn btn-primary" data-interest-accept="${studentUserId}|${projectId}">Accept</button>
-            <button class="btn btn-danger" data-interest-reject="${studentUserId}|${projectId}">Reject</button>
-        `
-        : `<span class="badge ${interestBadgeClass(interest.status)}">${interest.status}</span>`;
+    const studentInterests =
+        Array.isArray(interest.interests) &&
+        interest.interests.length
+            ? interest.interests.join(", ")
+            : "Not provided";
+
+    const submittedDate =
+        interest.submittedAt
+            ? new Date(
+                interest.submittedAt
+            ).toLocaleDateString("en-IN", {
+                day: "numeric",
+                month: "short",
+                year: "numeric"
+            })
+            : "—";
+
+    const esc = (value) =>
+        String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+
+    const actions =
+        interest.status === "Pending"
+            ? `
+                <button
+                    class="btn btn-primary"
+                    data-interest-accept="${esc(studentEmail)}|${esc(projectCode)}">
+                    Accept
+                </button>
+
+                <button
+                    class="btn btn-danger"
+                    data-interest-reject="${esc(studentEmail)}|${esc(projectCode)}">
+                    Reject
+                </button>
+            `
+            : `
+                <span class="badge ${interestBadgeClass(interest.status)}">
+                    ${esc(interest.status)}
+                </span>
+            `;
 
     modalBody.innerHTML = `
-        <p class="modal-eyebrow">Student interest</p>
-        <h2 class="modal-title">${student.name}</h2>
+
+        <p class="modal-eyebrow">
+            Student interest
+        </p>
+
+        <h2 class="modal-title">
+            ${esc(interest.studentName)}
+        </h2>
 
         <div class="modal-meta-row">
+
             <div class="modal-meta-item">
-                <span class="meta-label">Semester</span>
-                <span class="meta-value">Sem ${student.semester} · ${cohortCodeFromSemester(student.semester)}</span>
+                <span class="meta-label">
+                    Semester
+                </span>
+
+                <span class="meta-value">
+                    ${esc(interest.semester || "—")}
+                </span>
             </div>
+
             <div class="modal-meta-item">
-                <span class="meta-label">Current project</span>
-                <span class="meta-value">${currentProject || "None"}</span>
+                <span class="meta-label">
+                    Program
+                </span>
+
+                <span class="meta-value">
+                    ${esc(interest.program || "—")}
+                </span>
             </div>
+
             <div class="modal-meta-item">
-                <span class="meta-label">Status</span>
-                <span class="meta-value">${interest.status}</span>
+                <span class="meta-label">
+                    Roll number
+                </span>
+
+                <span class="meta-value">
+                    ${esc(interest.rollNumber || "—")}
+                </span>
             </div>
+
         </div>
 
-        <p class="modal-section-label">Interested in</p>
-        <p class="modal-text">${project ? project.title : "—"}</p>
+        <p class="modal-section-label">
+            Student email
+        </p>
 
-        <div class="modal-actions">${actions}</div>
+        <p class="modal-text">
+            ${esc(interest.studentEmail)}
+        </p>
+
+        <p class="modal-section-label">
+            Interested in
+        </p>
+
+        <p class="modal-text">
+            <strong>${esc(interest.projectTitle)}</strong>
+            <br>
+            ${esc(interest.projectCode)}
+        </p>
+
+        <p class="modal-section-label">
+            Skills
+        </p>
+
+        <p class="modal-text">
+            ${esc(skills)}
+        </p>
+
+        <p class="modal-section-label">
+            Interests
+        </p>
+
+        <p class="modal-text">
+            ${esc(studentInterests)}
+        </p>
+
+        ${
+            interest.message
+                ? `
+                    <p class="modal-section-label">
+                        Student message
+                    </p>
+
+                    <p class="modal-text">
+                        ${esc(interest.message)}
+                    </p>
+                `
+                : ""
+        }
+
+        <p class="modal-section-label">
+            Submitted
+        </p>
+
+        <p class="modal-text">
+            ${esc(submittedDate)}
+        </p>
+
+        <div class="modal-actions">
+            ${actions}
+        </div>
     `;
+
     modalOverlay.classList.remove("hidden");
 }
 
@@ -851,29 +1297,92 @@ function injectInterestTableStyles() {
     document.head.appendChild(st);
 }
 
-function acceptInterest(studentUserId, projectId) {
-    closeModal();
-    updateInterestStatus(studentUserId, projectId, "Accepted");
+async function acceptInterest(studentEmail, projectCode) {
 
-    const student = deriveStudentProfile(studentUserId);
-    const project = getAllProjects().find((p) => p.id === projectId);
-    if (project) {
-        const team = [...(project.team || [])];
-        if (!team.some((m) => m.name === student.name)) {
-            team.push({ name: student.name, semester: student.semester });
-        }
-        editProject(projectId, { team });
+    const { error } =
+        await window.supabaseClient.rpc(
+            "review_expression_of_interest",
+            {
+                p_student_email: studentEmail,
+                p_project_code: projectCode,
+                p_action: "accepted",
+                p_comment: null
+            }
+        );
+
+    if (error) {
+        console.error(
+            "Could not accept student interest:",
+            error
+        );
+
+        showToast(
+            "Could not accept this interest."
+        );
+
+        return;
     }
 
-    showToast(`${student.name} accepted onto the team ✓`);
+    const interest =
+        mentorInterestData.find(
+            (item) =>
+                item.studentEmail === studentEmail &&
+                item.projectCode === projectCode
+        );
+
+    showToast(
+        `${interest?.studentName || "Student"} accepted onto the project ✓`
+    );
+
+    closeModal();
+
+    await loadMentorGroups();
+    await loadMentorInterests();
+
     renderAll();
 }
 
-function rejectInterest(studentUserId, projectId) {
+async function rejectInterest(studentEmail, projectCode) {
+
+    const { error } =
+        await window.supabaseClient.rpc(
+            "review_expression_of_interest",
+            {
+                p_student_email: studentEmail,
+                p_project_code: projectCode,
+                p_action: "rejected",
+                p_comment: null
+            }
+        );
+
+    if (error) {
+        console.error(
+            "Could not reject student interest:",
+            error
+        );
+
+        showToast(
+            "Could not reject this interest."
+        );
+
+        return;
+    }
+
+    const interest =
+        mentorInterestData.find(
+            (item) =>
+                item.studentEmail === studentEmail &&
+                item.projectCode === projectCode
+        );
+
+    showToast(
+        `${interest?.studentName || "Student"}'s interest was declined.`
+    );
+
     closeModal();
-    updateInterestStatus(studentUserId, projectId, "Rejected");
-    const student = deriveStudentProfile(studentUserId);
-    showToast(`${student.name}'s interest was declined.`);
+
+    await loadMentorInterests();
+
     renderAll();
 }
 
@@ -1401,13 +1910,18 @@ document.getElementById("createProjectBtn").addEventListener("click", openCreate
 function buildNotifications() {
     const notifications = [];
 
-    getAllInterestsAcrossStudents().filter((i) => i.status === "Pending").forEach((i) => {
-        const student = deriveStudentProfile(i.studentUserId);
-        const project = getAllProjects().find((p) => p.id === i.projectId);
+    mentorInterestData
+    .filter((i) => i.status === "Pending")
+    .forEach((i) => {
+        mentorInterestData
+    .filter((i) => i.status === "Pending")
+    .forEach((i) => {
         notifications.push({
             icon: "👤",
             date: (i.submittedAt || "").slice(0, 10),
-            text: `<strong>${student.name}</strong> has expressed interest in ${project ? project.title : "a project"}.`
+            text:
+                `<strong>${i.studentName}</strong> has expressed interest in ` +
+                `<strong>${i.projectTitle}</strong>.`
         });
     });
 
@@ -1553,22 +2067,28 @@ document.addEventListener("click", (e) => {
 
     const interestView = e.target.closest("[data-interest-view]");
     if (interestView) {
-        const [studentUserId, projectId] = interestView.dataset.interestView.split("|");
-        openInterestModal(studentUserId, projectId);
+        const [studentEmail, projectCode] =
+    interestView.dataset.interestView.split("|");
+
+openInterestModal(studentEmail, projectCode);
         return;
     }
 
     const interestAccept = e.target.closest("[data-interest-accept]");
     if (interestAccept) {
-        const [studentUserId, projectId] = interestAccept.dataset.interestAccept.split("|");
-        acceptInterest(studentUserId, projectId);
+        const [studentEmail, projectCode] =
+    interestAccept.dataset.interestAccept.split("|");
+
+acceptInterest(studentEmail, projectCode);
         return;
     }
 
     const interestReject = e.target.closest("[data-interest-reject]");
     if (interestReject) {
-        const [studentUserId, projectId] = interestReject.dataset.interestReject.split("|");
-        rejectInterest(studentUserId, projectId);
+        const [studentEmail, projectCode] =
+    interestReject.dataset.interestReject.split("|");
+
+rejectInterest(studentEmail, projectCode);
         return;
     }
 
@@ -1599,6 +2119,7 @@ document.addEventListener("click", (e) => {
 async function renderAll() {
     await loadMentorName();
     await loadMentorGroups();
+    await loadMentorInterests();
     await loadProposals();
 
     renderProposalsDomainFilter();
