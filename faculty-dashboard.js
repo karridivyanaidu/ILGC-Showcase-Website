@@ -41,6 +41,7 @@ let allProjectsData = [];
 let interestedStudentsData = [];
 let myProjectMembersData = [];
 let studentProfilesData = [];
+let allDomainNames = [];
 
 let projectsActiveStatus = "All";
 let projectsActiveSemester = "All";
@@ -1765,16 +1766,30 @@ function openStudentModal(email) {
    DISCOVER PROJECTS
 ====================================================== */
 
+function escapeHtml(text) {
+
+    return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+
 function discoverDomains() {
+
+    const fromProjects =
+        allProjectsData.flatMap(
+            (project) =>
+                project.domains || []
+        );
 
     return [
         "All",
-        ...new Set(
-            allProjectsData.flatMap(
-                (project) =>
-                    project.domains || []
-            )
-        )
+        ...new Set([
+            ...allDomainNames,
+            ...fromProjects
+        ])
     ];
 }
 
@@ -1825,10 +1840,10 @@ function renderDiscoverChips() {
                 (domain) => `
                     <button
                         class="chip"
-                        data-discover-domain="${domain}"
+                        data-discover-domain="${escapeHtml(domain)}"
                         data-active="${domain === discoverDomain}"
                     >
-                        ${domain}
+                        ${escapeHtml(domain)}
                     </button>
                 `
             ).join("");
@@ -2405,6 +2420,19 @@ async function renderTags() {
 
         return;
     }
+
+    allDomainNames =
+        (data || []).map((tag) => tag.name);
+
+    if (
+        discoverDomain !== "All" &&
+        !allDomainNames.includes(discoverDomain)
+    ) {
+        discoverDomain = "All";
+    }
+
+    renderDiscoverChips();
+    renderDiscover();
 
     list.innerHTML = "";
 
