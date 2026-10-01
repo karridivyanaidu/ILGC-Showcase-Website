@@ -325,3 +325,31 @@
     font-size: 14px;
     line-height: 1.6;
 }
+
+/* =====================================================
+   STUDENT INTEREST MODAL
+===================================================== */
+
+.interest-student-details {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 16px;
+    background: #F8FCFC;
+    border: 1px solid #E6EFEE;
+    border-radius: 12px;
+    margin-bottom: 18px;
+}
+
+.interest-student-details p {
+    margin: 0;
+    font-size: 13px;
+    color: #52666D;
+    line-height: 1.5;
+}
+
+.interest-student-details strong {
+    display: inline-block;
+    min-width: 110px;
+    color: #17313A;
+}
