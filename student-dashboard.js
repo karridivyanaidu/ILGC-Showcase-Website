@@ -570,151 +570,49 @@ console.log(
 }
 
 /* ======================================================
-   EXPRESSIONS OF INTEREST — SUPABASE
+   INTERESTS STORAGE
+   Stored per-user in localStorage (see data.js) as a
+   stand-in for the backend: [{ projectId, status, submittedAt }]
 ====================================================== */
 
 let interests = [];
 
-
-/* ------------------------------------------------------
-   Convert Supabase EOI rows into the format already used
-   by the student dashboard.
------------------------------------------------------- */
-
-function normalizeInterest(row) {
-    return {
-        projectId: row.project_code,
-        status:
-            row.status
-                ? row.status.charAt(0).toUpperCase() +
-                  row.status.slice(1)
-                : "Pending",
-
-        submittedAt: row.submitted_at,
-
-        respondedAt:
-            row.reviewed_at || null,
-
-        reviewComment:
-            row.review_comment || "",
-
-        message:
-            row.message || ""
-    };
-}
-
-
-/* ------------------------------------------------------
-   Load this student's expressions of interest.
------------------------------------------------------- */
-
-async function loadStudentInterests() {
-
-    console.log(
-        "Loading expressions of interest for:",
-        userId
-    );
-
-    const { data, error } =
-        await window.supabaseClient
-            .from("expressions_of_interest")
-            .select(`
-                project_code,
-                status,
-                message,
-                submitted_at,
-                reviewed_at,
-                review_comment
-            `)
-            .eq("student_email", userId)
-            .order("submitted_at", {
-                ascending: false
-            });
-
-    if (error) {
-        console.error(
-            "Could not load expressions of interest:",
-            error
-        );
-
-        interests = [];
-        return;
-    }
-
-    interests =
-        (data || []).map(normalizeInterest);
-
-    console.log(
-        "Student expressions of interest:",
-        interests
-    );
-}
-
-
-/* ------------------------------------------------------
-   Find the student's interest for a project.
------------------------------------------------------- */
-
 function getInterest(projectId) {
-
-    return (
-        interests.find(
-            (interest) =>
-                String(interest.projectId) ===
-                String(projectId)
-        ) || null
-    );
+    return interests.find((i) => i.projectId === projectId) || null;
 }
 
+function submitInterest(projectId) {
+    if (getInterest(projectId)) return;
 
-/* ------------------------------------------------------
-   Submit a real EOI to Supabase.
------------------------------------------------------- */
+    interests.push({
+        projectId,
+        status: "Pending",
+        submittedAt: new Date().toISOString()
+    });
 
-async function submitInterest(projectId) {
+    saveInterestsFor(userId, interests);
+    showToast("Interest submitted ✓");
+    renderAll();
+}
 
-    if (getInterest(projectId)) {
-        showToast(
-            "You have already expressed interest in this project."
-        );
-        return;
-    }
+/* Demo affordance: since there's no faculty portal wired up
+   yet to accept/reject, clicking an already-pending interest
+   simulates the faculty response so the flow is visible. */
+function simulateFacultyResponse(projectId) {
+    const interest = getInterest(projectId);
+    if (!interest || interest.status !== "Pending") return;
 
-    const { error } =
-        await window.supabaseClient
-            .from("expressions_of_interest")
-            .insert({
-                student_email: userId,
-                project_code: projectId,
-                status: "pending"
-            });
+    const project = getAllProjects().find((p) => p.id === projectId);
+    const mentor = project ? project.mentor : "The faculty mentor";
 
-    if (error) {
-
-        console.error(
-            "Could not submit expression of interest:",
-            error
-        );
-
-        if (error.code === "23505") {
-            showToast(
-                "You have already expressed interest in this project."
-            );
-        } else {
-            showToast(
-                "Could not submit your interest. Please try again."
-            );
-        }
-
-        return;
-    }
-
-    await loadStudentInterests();
-
+    interest.status = Math.random() < 0.6 ? "Accepted" : "Rejected";
+    interest.respondedAt = new Date().toISOString();
+    saveInterestsFor(userId, interests);
     showToast(
-        "Interest submitted successfully ✓"
+        interest.status === "Accepted"
+            ? `🎉 ${mentor} accepted you onto ${project ? project.title : "the project"}!`
+            : `${mentor} couldn't take you onto ${project ? project.title : "this project"} this time.`
     );
-
     renderAll();
 }
 
@@ -963,57 +861,34 @@ function renderHome() {
 ====================================================== */
 
 function actionButtonHtml(project) {
-
-    const interest =
-        getInterest(project.id);
+    const interest = getInterest(project.id);
 
     if (!interest) {
-
-        return `
-            <button
-                class="btn btn-primary"
-                data-express="${project.id}"
-            >
-                Express Interest
-            </button>
-        `;
+        return `<button class="btn btn-primary" data-express="${project.id}">Express Interest</button>`;
     }
-
 
     if (interest.status === "Pending") {
-
-        return `
-            <button
-                class="btn btn-pending"
-                disabled
-            >
-                Interest Pending ✓
-            </button>
-        `;
+        return `<button class="btn btn-pending" data-simulate="${project.id}" title="Demo: click to simulate faculty response">Pending ✓</button>`;
     }
-
 
     if (interest.status === "Accepted") {
-
-        return `
-            <button
-                class="btn btn-accepted"
-                disabled
-            >
-                Accepted ✓
-            </button>
-        `;
+        return `<button class="btn btn-accepted" disabled>Accepted ✓</button>`;
     }
 
+    return `<button class="btn btn-rejected" disabled>Not selected</button>`;
+}
 
-    return `
-        <button
-            class="btn btn-rejected"
-            disabled
-        >
-            Not selected
-        </button>
-    `;
+function studentDiscoverMentors() {
+    return [
+        "All",
+        ...[
+            ...new Set(
+                discoverProjects
+                    .map((p) => p.mentor)
+                    .filter(Boolean)
+            )
+        ].sort()
+    ];
 }
 
 function renderDiscoverChips() {
@@ -1477,7 +1352,11 @@ document.addEventListener("click", (e) => {
         return;
     }
 
-    
+    const simulateBtn = e.target.closest("[data-simulate]");
+    if (simulateBtn) {
+        simulateFacultyResponse(simulateBtn.dataset.simulate);
+        return;
+    }
 
     const emailProf = e.target.closest("[data-email-prof]");
     if (emailProf) {
@@ -1844,9 +1723,7 @@ function buildNotifications() {
     const notifications = [];
 
     // Updates on my interests (accepted / rejected).
-    interests
-    .filter((i) => i.status !== "Pending")
-    .forEach((i) => {
+    interests.filter((i) => i.status !== "Pending").forEach((i) => {
         const project = getAllProjects().find((p) => p.id === i.projectId);
         notifications.push({
             icon: i.status === "Accepted" ? "🎉" : "📩",
@@ -1942,13 +1819,9 @@ renderDiscoverChips();
 renderIdeasScopeChips();
 renderProfile();
 async function initStudentDashboard() {
-
     await loadStudentProfile();
 
-    studentProjects =
-        await loadStudentProjects();
-
-    await loadStudentInterests();
+    studentProjects = await loadStudentProjects();
 
     await loadDiscoverProjects();
 
@@ -1959,7 +1832,6 @@ async function initStudentDashboard() {
     ]);
 
     renderDiscoverChips();
-
     renderAll();
 }
 
