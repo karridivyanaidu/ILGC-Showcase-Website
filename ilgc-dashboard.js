@@ -3,7 +3,7 @@
 ====================================================== */
 /* ======================================================
    AUTH GUARD
-====================================================== */ 
+====================================================== */
 
 const role = localStorage.getItem("selectedRole");
 const loggedIn = localStorage.getItem("loggedIn");
@@ -51,7 +51,6 @@ async function loadMentorName() {
 ====================================================== */
 
 let mentorGroups = [];
-let mentorInterestData = [];
 
 async function loadMentorGroups() {
     console.log("Loading groups for mentor:", userId);
@@ -84,420 +83,6 @@ async function loadMentorGroups() {
         mentorGroups = [];
         return;
     }
-
-   /* ======================================================
-   LOAD STUDENT EXPRESSIONS OF INTEREST
-   Only interests for projects assigned to this mentor.
-====================================================== */
-
-async function loadMentorInterests() {
-
-    console.log(
-        "Loading student interests for mentor:",
-        userId
-    );
-
-
-    /* --------------------------------------------------
-       1. Get projects assigned to this mentor
-    -------------------------------------------------- */
-
-    const {
-        data: mentorProjects,
-        error: mentorProjectsError
-    } = await window.supabaseClient
-        .from("project_mentors")
-        .select("project_code")
-        .eq("mentor_email", userId);
-
-
-    if (mentorProjectsError) {
-
-        console.error(
-            "Could not load mentor projects for interests:",
-            mentorProjectsError
-        );
-
-        mentorInterestData = [];
-
-        return;
-    }
-
-
-    const projectCodes =
-        (mentorProjects || [])
-            .map((row) => row.project_code)
-            .filter(Boolean);
-
-
-    if (projectCodes.length === 0) {
-
-        mentorInterestData = [];
-
-        return;
-    }
-
-
-    /* --------------------------------------------------
-       2. Get EOI records
-    -------------------------------------------------- */
-
-    const {
-        data: interests,
-        error: interestsError
-    } = await window.supabaseClient
-        .from("expressions_of_interest")
-        .select(`
-            student_email,
-            project_code,
-            status,
-            message,
-            submitted_at,
-            reviewed_by,
-            reviewed_at,
-            review_comment
-        `)
-        .in("project_code", projectCodes)
-        .order("submitted_at", {
-            ascending: false
-        });
-
-
-    if (interestsError) {
-
-        console.error(
-            "Could not load student interests:",
-            interestsError
-        );
-
-        mentorInterestData = [];
-
-        return;
-    }
-
-
-    if (!interests || interests.length === 0) {
-
-        mentorInterestData = [];
-
-        return;
-    }
-
-
-    /* --------------------------------------------------
-       3. Student emails
-    -------------------------------------------------- */
-
-    const studentEmails = [
-        ...new Set(
-            interests
-                .map((interest) => interest.student_email)
-                .filter(Boolean)
-        )
-    ];
-
-
-    /* --------------------------------------------------
-       4. Student names
-    -------------------------------------------------- */
-
-    const {
-        data: users,
-        error: usersError
-    } = await window.supabaseClient
-        .from("users")
-        .select("email, name")
-        .in("email", studentEmails);
-
-
-    if (usersError) {
-
-        console.error(
-            "Could not load interested student names:",
-            usersError
-        );
-
-        mentorInterestData = [];
-
-        return;
-    }
-
-
-    /* --------------------------------------------------
-       5. Student profiles
-    -------------------------------------------------- */
-
-    const {
-        data: profiles,
-        error: profilesError
-    } = await window.supabaseClient
-        .from("student_profiles")
-        .select(`
-            email,
-            roll_number,
-            program,
-            department,
-            semester,
-            admission_year,
-            graduation_year,
-            bio,
-            skills,
-            interests,
-            github_url,
-            linkedin_url,
-            portfolio_url
-        `)
-        .in("email", studentEmails);
-
-
-    if (profilesError) {
-
-        console.error(
-            "Could not load interested student profiles:",
-            profilesError
-        );
-
-        mentorInterestData = [];
-
-        return;
-    }
-
-
-    /* --------------------------------------------------
-       6. Projects
-    -------------------------------------------------- */
-
-    const {
-        data: projects,
-        error: projectsError
-    } = await window.supabaseClient
-        .from("projects")
-        .select(`
-            project_code,
-            title,
-            description,
-            summary,
-            status,
-            progress,
-            academic_year,
-            semester
-        `)
-        .in("project_code", projectCodes);
-
-
-    if (projectsError) {
-
-        console.error(
-            "Could not load interest projects:",
-            projectsError
-        );
-
-        mentorInterestData = [];
-
-        return;
-    }
-
-
-    /* --------------------------------------------------
-       7. Current projects of interested students
-    -------------------------------------------------- */
-
-    const {
-        data: memberships,
-        error: membershipsError
-    } = await window.supabaseClient
-        .from("project_members")
-        .select(`
-            project_code,
-            student_email,
-            left_at
-        `)
-        .in("student_email", studentEmails)
-        .is("left_at", null);
-
-
-    if (membershipsError) {
-
-        console.error(
-            "Could not load current student projects:",
-            membershipsError
-        );
-    }
-
-
-    /* --------------------------------------------------
-       8. Build lookup maps
-    -------------------------------------------------- */
-
-    const userMap = new Map(
-        (users || []).map((user) => [
-            user.email,
-            user
-        ])
-    );
-
-
-    const profileMap = new Map(
-        (profiles || []).map((profile) => [
-            profile.email,
-            profile
-        ])
-    );
-
-
-    const projectMap = new Map(
-        (projects || []).map((project) => [
-            project.project_code,
-            project
-        ])
-    );
-
-
-    const membershipMap = new Map();
-
-    (memberships || []).forEach((membership) => {
-
-        if (!membershipMap.has(membership.student_email)) {
-            membershipMap.set(
-                membership.student_email,
-                []
-            );
-        }
-
-        membershipMap
-            .get(membership.student_email)
-            .push(membership);
-    });
-
-
-    /* --------------------------------------------------
-       9. Build final EOI objects
-    -------------------------------------------------- */
-
-    mentorInterestData =
-        interests.map((interest) => {
-
-            const user =
-                userMap.get(
-                    interest.student_email
-                ) || {};
-
-            const profile =
-                profileMap.get(
-                    interest.student_email
-                ) || {};
-
-            const project =
-                projectMap.get(
-                    interest.project_code
-                ) || {};
-
-            const studentMemberships =
-                membershipMap.get(
-                    interest.student_email
-                ) || [];
-
-
-            const currentMembership =
-                studentMemberships.find(
-                    (membership) =>
-                        membership.project_code !==
-                        interest.project_code
-                );
-
-
-            const currentProject =
-                currentMembership
-                    ? projectMap.get(
-                        currentMembership.project_code
-                    )
-                    : null;
-
-
-            return {
-
-                studentEmail:
-                    interest.student_email,
-
-                studentName:
-                    user.name ||
-                    interest.student_email,
-
-                semester:
-                    profile.semester ?? "—",
-
-                rollNumber:
-                    profile.roll_number || "",
-
-                program:
-                    profile.program || "",
-
-                department:
-                    profile.department || "",
-
-                bio:
-                    profile.bio || "",
-
-                skills:
-                    profile.skills || [],
-
-                interests:
-                    profile.interests || [],
-
-                githubUrl:
-                    profile.github_url || "",
-
-                linkedinUrl:
-                    profile.linkedin_url || "",
-
-                projectCode:
-                    interest.project_code,
-
-                projectTitle:
-                    project.title ||
-                    interest.project_code,
-
-                projectDescription:
-                    project.description ||
-                    project.summary ||
-                    "",
-
-                projectStatus:
-                    project.status || "",
-
-                currentProject:
-                    currentProject?.title ||
-                    "None",
-
-                status:
-                    interest.status
-                        ? interest.status.charAt(0).toUpperCase() +
-                          interest.status.slice(1)
-                        : "Pending",
-
-                message:
-                    interest.message || "",
-
-                submittedAt:
-                    interest.submitted_at,
-
-                reviewedAt:
-                    interest.reviewed_at,
-
-                reviewedBy:
-                    interest.reviewed_by,
-
-                reviewComment:
-                    interest.review_comment || ""
-            };
-        });
-
-
-    console.log(
-        "Final mentor interest data:",
-        mentorInterestData
-    );
-}
 
     // --------------------------------------------------
     // 2. Get project details from projects table
@@ -845,11 +430,7 @@ function renderHome() {
 
     const groups = mentorGroups || [];
     const activeProjects = mentorGroups.length;
-    const pendingInterests =
-    mentorInterestData.filter(
-        (interest) =>
-            interest.status === "Pending"
-    );
+    const pendingInterests = getAllInterestsAcrossStudents().filter((i) => i.status === "Pending");
     const pendingProposals = getProposals().filter((i) => i.status === "Pending" || i.status === "Needs Revision");
     const reportsToReview = getAllReports().filter((r) => r.status === "Submitted" || r.status === "Under Review" || r.status === "Resubmitted");
 
@@ -1112,96 +693,53 @@ function ilgcSharePointViewHtml(projectId) {
 ====================================================== */
 
 function renderInterest() {
+    const rows = getAllInterestsAcrossStudents().sort(
+        (a, b) => new Date(b.submittedAt) - new Date(a.submittedAt)
+    );
 
-    const container =
-        document.getElementById("interestTable");
-
-    const empty =
-        document.getElementById("interestEmpty");
-
-
-    const rows =
-        [...mentorInterestData]
-            .sort(
-                (a, b) =>
-                    new Date(b.submittedAt) -
-                    new Date(a.submittedAt)
-            );
-
+    const container = document.getElementById("interestTable");
+    const empty = document.getElementById("interestEmpty");
 
     if (rows.length === 0) {
-
         container.innerHTML = "";
-
         empty.classList.remove("hidden");
-
         return;
     }
 
-
     empty.classList.add("hidden");
 
+    const allProjects = getAllProjects();
 
     injectInterestTableStyles();
-
     container.classList.add("interest-tbl");
 
+    const escI = (v) => String(v == null ? "" : v)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-    const esc = (value) =>
-        String(value == null ? "" : value)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;");
+    const bodyRows = rows.map((interest) => {
+        const project = allProjects.find((p) => p.id === interest.projectId);
+        const student = deriveStudentProfile(interest.studentUserId);
 
+        const otherInterests = loadInterestsFor(interest.studentUserId);
+        const acceptedElsewhere = otherInterests.find((i) => i.status === "Accepted");
+        const currentProject = acceptedElsewhere
+            ? (allProjects.find((p) => p.id === acceptedElsewhere.projectId) || {}).title
+            : "None";
 
-    const bodyRows =
-        rows.map((interest) => {
-
-            return `
-                <div class="itbl-row">
-
-                    <span class="itbl-student">
-                        ${esc(interest.studentName)}
-                    </span>
-
-                    <span class="itbl-muted">
-                        Sem ${esc(interest.semester)}
-                    </span>
-
-                    <span class="itbl-muted">
-                        ${esc(interest.currentProject)}
-                    </span>
-
-                    <span class="itbl-strong">
-                        ${esc(interest.projectTitle)}
-                    </span>
-
-                    <span>
-                        <span class="badge ${interestBadgeClass(interest.status)}">
-                            ${esc(interest.status)}
-                        </span>
-                    </span>
-
-                    <span class="itbl-action">
-                        <button
-                            class="itbl-view"
-                            data-interest-view="${esc(interest.studentEmail)}|${esc(interest.projectCode)}"
-                        >
-                            View
-                        </button>
-                    </span>
-
-                </div>
-            `;
-
-        }).join("");
-
+        return `
+            <div class="itbl-row">
+                <span class="itbl-student">${escI(student.name)}</span>
+                <span class="itbl-muted">Sem ${escI(student.semester)}</span>
+                <span class="itbl-muted">${escI(currentProject || "None")}</span>
+                <span class="itbl-strong">${project ? escI(project.title) : "—"}</span>
+                <span><span class="badge ${interestBadgeClass(interest.status)}">${escI(interest.status)}</span></span>
+                <span class="itbl-action"><button class="itbl-view" data-interest-view="${interest.studentUserId}|${interest.projectId}">View</button></span>
+            </div>
+        `;
+    }).join("");
 
     container.innerHTML = `
-
         <div class="itbl-scroll">
-
             <div class="itbl-head">
                 <span>Student</span>
                 <span>Semester</span>
@@ -1210,207 +748,53 @@ function renderInterest() {
                 <span>Status</span>
                 <span class="itbl-action">Action</span>
             </div>
-
             ${bodyRows}
-
         </div>
     `;
 }
 
-function openInterestModal(
-    studentEmail,
-    projectCode
-) {
-
-    const interest =
-        mentorInterestData.find(
-            (item) =>
-                item.studentEmail === studentEmail &&
-                item.projectCode === projectCode
-        );
-
-
+function openInterestModal(studentUserId, projectId) {
+    const interest = getAllInterestsAcrossStudents()
+        .find((i) => String(i.studentUserId) === String(studentUserId) && String(i.projectId) === String(projectId));
     if (!interest) return;
 
+    const allProjects = getAllProjects();
+    const project = allProjects.find((p) => p.id === projectId);
+    const student = deriveStudentProfile(studentUserId);
+    const accepted = loadInterestsFor(studentUserId).find((i) => i.status === "Accepted");
+    const currentProject = accepted ? (allProjects.find((p) => p.id === accepted.projectId) || {}).title : "None";
 
-    const skillsHtml =
-        interest.skills.length
-            ? interest.skills
-                .map(
-                    (skill) =>
-                        `<span class="team-chip">${skill}</span>`
-                )
-                .join("")
-            : `<p class="modal-text">No skills listed.</p>`;
-
-
-    const interestsHtml =
-        interest.interests.length
-            ? interest.interests
-                .map(
-                    (item) =>
-                        `<span class="team-chip">${item}</span>`
-                )
-                .join("")
-            : `<p class="modal-text">No interests listed.</p>`;
-
-
-    const actions =
-        interest.status === "Pending"
-            ? `
-                <button
-                    class="btn btn-danger"
-                    data-interest-reject="${interest.studentEmail}|${interest.projectCode}"
-                >
-                    Reject
-                </button>
-
-                <button
-                    class="btn btn-primary"
-                    data-interest-accept="${interest.studentEmail}|${interest.projectCode}"
-                >
-                    Accept
-                </button>
-            `
-            : `
-                <span class="badge ${interestBadgeClass(interest.status)}">
-                    ${interest.status}
-                </span>
-            `;
-
+    const actions = interest.status === "Pending"
+        ? `
+            <button class="btn btn-primary" data-interest-accept="${studentUserId}|${projectId}">Accept</button>
+            <button class="btn btn-danger" data-interest-reject="${studentUserId}|${projectId}">Reject</button>
+        `
+        : `<span class="badge ${interestBadgeClass(interest.status)}">${interest.status}</span>`;
 
     modalBody.innerHTML = `
-
-        <p class="modal-eyebrow">
-            STUDENT INTEREST
-        </p>
-
-        <h2 class="modal-title">
-            ${interest.studentName}
-        </h2>
-
+        <p class="modal-eyebrow">Student interest</p>
+        <h2 class="modal-title">${student.name}</h2>
 
         <div class="modal-meta-row">
-
             <div class="modal-meta-item">
-                <span class="meta-label">
-                    Semester
-                </span>
-
-                <span class="meta-value">
-                    Sem ${interest.semester}
-                </span>
+                <span class="meta-label">Semester</span>
+                <span class="meta-value">Sem ${student.semester} · ${cohortCodeFromSemester(student.semester)}</span>
             </div>
-
-
             <div class="modal-meta-item">
-                <span class="meta-label">
-                    Program
-                </span>
-
-                <span class="meta-value">
-                    ${interest.program || "—"}
-                </span>
+                <span class="meta-label">Current project</span>
+                <span class="meta-value">${currentProject || "None"}</span>
             </div>
-
-
             <div class="modal-meta-item">
-                <span class="meta-label">
-                    Department
-                </span>
-
-                <span class="meta-value">
-                    ${interest.department || "—"}
-                </span>
+                <span class="meta-label">Status</span>
+                <span class="meta-value">${interest.status}</span>
             </div>
-
         </div>
 
+        <p class="modal-section-label">Interested in</p>
+        <p class="modal-text">${project ? project.title : "—"}</p>
 
-        <p class="modal-section-label">
-            Student information
-        </p>
-
-        <div class="interest-student-details">
-
-            <p>
-                <strong>Email</strong>
-                ${interest.studentEmail}
-            </p>
-
-            <p>
-                <strong>Roll number</strong>
-                ${interest.rollNumber || "—"}
-            </p>
-
-            <p>
-                <strong>Current project</strong>
-                ${interest.currentProject}
-            </p>
-
-        </div>
-
-
-        <p class="modal-section-label">
-            Skills
-        </p>
-
-        <div class="modal-team">
-            ${skillsHtml}
-        </div>
-
-
-        <p class="modal-section-label">
-            Interests
-        </p>
-
-        <div class="modal-team">
-            ${interestsHtml}
-        </div>
-
-
-        <p class="modal-section-label">
-            Interested in
-        </p>
-
-        <p class="modal-text">
-            ${interest.projectTitle}
-        </p>
-
-
-        <p class="modal-section-label">
-            Message
-        </p>
-
-        <p class="modal-text">
-            ${
-                interest.message ||
-                "No message was provided."
-            }
-        </p>
-
-
-        <p class="modal-section-label">
-            Submitted
-        </p>
-
-        <p class="modal-text">
-            ${
-                interest.submittedAt
-                    ? new Date(
-                        interest.submittedAt
-                    ).toLocaleString("en-IN")
-                    : "—"
-            }
-        </p>
-
-
-        <div class="modal-actions">
-            ${actions}
-        </div>
+        <div class="modal-actions">${actions}</div>
     `;
-
-
     modalOverlay.classList.remove("hidden");
 }
 
@@ -1467,151 +851,29 @@ function injectInterestTableStyles() {
     document.head.appendChild(st);
 }
 
-async function acceptInterest(
-    studentEmail,
-    projectCode
-) {
+function acceptInterest(studentUserId, projectId) {
+    closeModal();
+    updateInterestStatus(studentUserId, projectId, "Accepted");
 
-    const interest =
-        mentorInterestData.find(
-            (item) =>
-                item.studentEmail === studentEmail &&
-                item.projectCode === projectCode
-        );
-
-
-    if (!interest) return;
-
-
-    const confirmed =
-        confirm(
-            `Accept ${interest.studentName} onto ${interest.projectTitle}?`
-        );
-
-
-    if (!confirmed) return;
-
-
-    const { data, error } =
-        await window.supabaseClient
-            .rpc(
-                "review_expression_of_interest",
-                {
-                    p_student_email: studentEmail,
-                    p_project_code: projectCode,
-                    p_action: "accepted",
-                    p_comment: null
-                }
-            );
-
-
-    if (error) {
-
-        console.error(
-            "Could not accept student:",
-            error
-        );
-
-        showToast(
-            "Could not accept the student."
-        );
-
-        return;
+    const student = deriveStudentProfile(studentUserId);
+    const project = getAllProjects().find((p) => p.id === projectId);
+    if (project) {
+        const team = [...(project.team || [])];
+        if (!team.some((m) => m.name === student.name)) {
+            team.push({ name: student.name, semester: student.semester });
+        }
+        editProject(projectId, { team });
     }
 
-
-    console.log(
-        "Student accepted:",
-        data
-    );
-
-
-    closeModal();
-
-
-    await loadMentorGroups();
-
-    await loadMentorInterests();
-
-
-    showToast(
-        `${interest.studentName} accepted onto the team ✓`
-    );
-
-
+    showToast(`${student.name} accepted onto the team ✓`);
     renderAll();
 }
 
-async function rejectInterest(
-    studentEmail,
-    projectCode
-) {
-
-    const interest =
-        mentorInterestData.find(
-            (item) =>
-                item.studentEmail === studentEmail &&
-                item.projectCode === projectCode
-        );
-
-
-    if (!interest) return;
-
-
-    const confirmed =
-        confirm(
-            `Reject ${interest.studentName}'s interest in ${interest.projectTitle}?`
-        );
-
-
-    if (!confirmed) return;
-
-
-    const { data, error } =
-        await window.supabaseClient
-            .rpc(
-                "review_expression_of_interest",
-                {
-                    p_student_email: studentEmail,
-                    p_project_code: projectCode,
-                    p_action: "rejected",
-                    p_comment: null
-                }
-            );
-
-
-    if (error) {
-
-        console.error(
-            "Could not reject student:",
-            error
-        );
-
-        showToast(
-            "Could not reject the student's interest."
-        );
-
-        return;
-    }
-
-
-    console.log(
-        "Student rejected:",
-        data
-    );
-
-
+function rejectInterest(studentUserId, projectId) {
     closeModal();
-
-
-    await loadMentorInterests();
-
-
-    showToast(
-        `${interest.studentName}'s interest was rejected.`
-    );
-
-
+    updateInterestStatus(studentUserId, projectId, "Rejected");
+    const student = deriveStudentProfile(studentUserId);
+    showToast(`${student.name}'s interest was declined.`);
     renderAll();
 }
 
@@ -2139,25 +1401,14 @@ document.getElementById("createProjectBtn").addEventListener("click", openCreate
 function buildNotifications() {
     const notifications = [];
 
-    mentorInterestData
-    .filter(
-        (interest) =>
-            interest.status === "Pending"
-    )
-    .forEach((interest) => {
-
+    getAllInterestsAcrossStudents().filter((i) => i.status === "Pending").forEach((i) => {
+        const student = deriveStudentProfile(i.studentUserId);
+        const project = getAllProjects().find((p) => p.id === i.projectId);
         notifications.push({
             icon: "👤",
-
-            date:
-                interest.submittedAt
-                    ? interest.submittedAt.slice(0, 10)
-                    : "",
-
-            text:
-                `<strong>${interest.studentName}</strong> has expressed interest in ${interest.projectTitle}.`
+            date: (i.submittedAt || "").slice(0, 10),
+            text: `<strong>${student.name}</strong> has expressed interest in ${project ? project.title : "a project"}.`
         });
-
     });
 
     getProposals().filter((i) => i.status === "Pending").forEach((i) => {
@@ -2300,68 +1551,26 @@ document.addEventListener("click", (e) => {
     const groupOpen = e.target.closest("[data-group-open]");
     if (groupOpen) { openGroupDetailModal(groupOpen.dataset.groupOpen); return; }
 
-    const interestView =
-    e.target.closest("[data-interest-view]");
+    const interestView = e.target.closest("[data-interest-view]");
+    if (interestView) {
+        const [studentUserId, projectId] = interestView.dataset.interestView.split("|");
+        openInterestModal(studentUserId, projectId);
+        return;
+    }
 
-if (interestView) {
+    const interestAccept = e.target.closest("[data-interest-accept]");
+    if (interestAccept) {
+        const [studentUserId, projectId] = interestAccept.dataset.interestAccept.split("|");
+        acceptInterest(studentUserId, projectId);
+        return;
+    }
 
-    const [
-        studentEmail,
-        projectCode
-    ] =
-        interestView.dataset
-            .interestView
-            .split("|");
-
-    openInterestModal(
-        studentEmail,
-        projectCode
-    );
-
-    return;
-}
-
-    const interestAccept =
-    e.target.closest("[data-interest-accept]");
-
-if (interestAccept) {
-
-    const [
-        studentEmail,
-        projectCode
-    ] =
-        interestAccept.dataset
-            .interestAccept
-            .split("|");
-
-    acceptInterest(
-        studentEmail,
-        projectCode
-    );
-
-    return;
-}
-
-    const interestReject =
-    e.target.closest("[data-interest-reject]");
-
-if (interestReject) {
-
-    const [
-        studentEmail,
-        projectCode
-    ] =
-        interestReject.dataset
-            .interestReject
-            .split("|");
-
-    rejectInterest(
-        studentEmail,
-        projectCode
-    );
-
-    return;
-}
+    const interestReject = e.target.closest("[data-interest-reject]");
+    if (interestReject) {
+        const [studentUserId, projectId] = interestReject.dataset.interestReject.split("|");
+        rejectInterest(studentUserId, projectId);
+        return;
+    }
 
     const proposalAccept = e.target.closest("[data-proposal-accept]");
     if (proposalAccept) { openProposalDecisionModal(proposalAccept.dataset.proposalAccept, "Accepted"); return; }
@@ -2388,30 +1597,17 @@ if (interestReject) {
 ====================================================== */
 
 async function renderAll() {
-
     await loadMentorName();
-
     await loadMentorGroups();
-
-    await loadMentorInterests();
-
     await loadProposals();
 
-
     renderProposalsDomainFilter();
-
     renderHome();
-
     renderGroups();
-
     renderInterest();
-
     renderProposals();
-
     renderReports();
-
     renderNotifications();
-
     renderProfile();
 }
 
