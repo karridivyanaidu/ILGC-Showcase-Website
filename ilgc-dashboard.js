@@ -1933,12 +1933,22 @@ function buildNotifications() {
         });
     });
 
-    getAllReports().filter((r) => r.status === "Submitted" || r.status === "Under Review" || r.status === "Resubmitted").forEach((r) => {
+    getAllReports()
+    .filter(
+        (r) =>
+            r.status === "Submitted" ||
+            r.status === "Under Review" ||
+            r.status === "Resubmitted"
+    )
+    .forEach((r) => {
         const project = mentorGroups.find((p) => p.id === r.projectId);
+
         notifications.push({
             icon: "📄",
             date: r.submittedDate,
-            text: `${r.submittedBy} submitted a ${r.reportType.toLowerCase()} for <strong>${project ? project.title : "a project"}</strong> — review required.`
+            text: `${r.submittedBy} submitted a ${r.reportType.toLowerCase()} for <strong>${
+                project ? project.title : "a project"
+            }</strong>`,
         });
     });
 
