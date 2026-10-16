@@ -52,6 +52,7 @@ async function loadMentorName() {
 
 let mentorGroups = [];
 let mentorInterestData = [];
+let deletedProjectRows = [];
 
 async function loadMentorGroups() {
     console.log("Loading groups for mentor:", userId);
@@ -256,6 +257,11 @@ async function loadMentorGroups() {
     });
 
     mentorGroups = Array.from(groupsMap.values());
+
+    // Projects recorded in deleted_projects are hidden from My Groups.
+    const deleted = await loadDeletedProjectRows();
+    const deletedCodes = new Set((deleted || []).map((row) => String(row.original_project_id)));
+    mentorGroups = mentorGroups.filter((group) => !deletedCodes.has(String(group.projectCode)));
 
     console.log("Final mentor groups:", mentorGroups);
 }
@@ -622,7 +628,7 @@ function goToTab(tabName) {
     });
 }
 
-tabButtons.forEach((btn) => btn.addEventListener("click", () => goToTab(btn.dataset.tab)));
+tabButtons.forEach((btn) => btn.addEventListener("click", () => { goToTab(btn.dataset.tab); if (btn.dataset.tab === "deleted") renderDeletedProjects(); }));
 if (notifBtn) {
     notifBtn.addEventListener("click", () => goToTab(notifBtn.dataset.tab));
 }
@@ -775,6 +781,122 @@ function renderHome() {
 
 
 /* ======================================================
+   DELETE / RESTORE PROJECTS
+====================================================== */
+
+async function loadDeletedProjectRows() {
+    const { data, error } = await window.supabaseClient
+        .from("deleted_projects")
+        .select("id, original_project_id, project_data, deleted_at")
+        .order("deleted_at", { ascending: false });
+    if (error) {
+        console.error("Could not load deleted projects:", error);
+        deletedProjectRows = [];
+        return [];
+    }
+    deletedProjectRows = data || [];
+    return deletedProjectRows;
+}
+
+async function deleteMentorProject(projectCode) {
+    const code = String(projectCode);
+    const project = mentorGroups.find((g) => String(g.projectCode) === code);
+    if (!project) return;
+    if (!window.confirm(`Move "${project.title}" to Deleted Projects?`)) return;
+
+    // Store a snapshot before hiding it, so the project can be restored later.
+    const { data: projectRow, error: projectError } = await window.supabaseClient
+        .from("projects")
+        .select("*")
+        .eq("project_code", projectCode)
+        .maybeSingle();
+    if (projectError || !projectRow) {
+        console.error("Could not read project before deletion:", projectError);
+        showToast("Could not load project details. Nothing was deleted.");
+        return;
+    }
+
+    const sessionResult = await window.supabaseClient.auth.getUser();
+    const authUserId = sessionResult?.data?.user?.id || null;
+    const { error: saveError } = await window.supabaseClient
+        .from("deleted_projects")
+        .insert({
+            original_project_id: code,
+            project_data: projectRow,
+            deleted_by: authUserId
+        });
+    if (saveError) {
+        console.error("Could not save deleted project snapshot:", saveError);
+        showToast("Delete failed. Check deleted_projects RLS policies.");
+        return;
+    }
+
+    mentorGroups = mentorGroups.filter((g) => String(g.projectCode) !== code);
+    renderGroups();
+    await renderDeletedProjects();
+    showToast("Project moved to Deleted Projects.");
+}
+
+async function renderDeletedProjects() {
+    const grid = document.getElementById("deletedProjectsGrid");
+    const empty = document.getElementById("deletedProjectsEmpty");
+    if (!grid || !empty) return;
+    const rows = await loadDeletedProjectRows();
+    if (!rows.length) {
+        grid.innerHTML = "";
+        empty.classList.remove("hidden");
+        return;
+    }
+    empty.classList.add("hidden");
+    grid.innerHTML = rows.map((row) => {
+        const p = row.project_data || {};
+        const title = p.title || `Project ${row.original_project_id}`;
+        const date = row.deleted_at ? new Date(row.deleted_at).toLocaleDateString() : "";
+        return `<article class="group-card mentor-project-card">
+          <div class="group-card-top"><span class="project-code">${String(row.original_project_id)}</span><span class="badge">Deleted</span></div>
+          <div class="group-card-body"><h3 class="group-title">${escapeHtml(title)}</h3><p class="project-meta">Deleted ${date}</p>${p.description ? `<p class="project-description">${escapeHtml(p.description)}</p>` : ""}</div>
+          <div class="group-card-actions"><button class="btn btn-secondary" type="button" data-project-restore="${row.id}">Restore to My Groups</button></div>
+        </article>`;
+    }).join("");
+}
+
+function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[ch]));
+}
+
+async function restoreDeletedProject(rowId) {
+    const row = deletedProjectRows.find((item) => item.id === rowId);
+    if (!row) { await loadDeletedProjectRows(); }
+    const selected = deletedProjectRows.find((item) => item.id === rowId);
+    if (!selected?.project_data) { showToast("Could not find the saved project snapshot."); return; }
+    const snapshot = { ...selected.project_data };
+    const { project_code, ...updateFields } = snapshot;
+    // Restore missing/changed project fields by updating the existing row when possible.
+    const { data: existing, error: findError } = await window.supabaseClient
+        .from("projects").select("project_code").eq("project_code", selected.original_project_id).maybeSingle();
+    if (findError) { showToast("Could not check the original project."); return; }
+    let restoreError = null;
+    if (existing) {
+        const result = await window.supabaseClient.from("projects").update(updateFields).eq("project_code", selected.original_project_id);
+        restoreError = result.error;
+    } else {
+        const result = await window.supabaseClient.from("projects").insert(snapshot);
+        restoreError = result.error;
+    }
+    if (restoreError) {
+        console.error("Restore failed:", restoreError);
+        showToast("Restore failed. Check projects table permissions.");
+        return;
+    }
+    const { error: removeError } = await window.supabaseClient.from("deleted_projects").delete().eq("id", rowId);
+    if (removeError) { console.error(removeError); showToast("Project restored, but its deleted record could not be cleared."); return; }
+    await renderAll();
+    await renderDeletedProjects();
+    goToTab("groups");
+    showToast("Project restored to My Groups.");
+}
+
+/* ======================================================
    RENDER: MY GROUPS
 ====================================================== */
 
@@ -850,6 +972,10 @@ function renderGroups() {
                         ${status}
                     </span>
 
+                </div>
+
+                <div class="group-card-actions">
+                    <button class="btn btn-danger" type="button" data-project-delete="${String(group.projectCode).replace(/"/g, '&quot;')}">Delete project</button>
                 </div>
 
                 <div class="group-card-body">
@@ -2165,6 +2291,10 @@ const addReportBtnEl = document.getElementById("addReportBtn");
 if (addReportBtnEl) addReportBtnEl.remove();
 
 document.addEventListener("click", (e) => {
+    const deleteBtn = e.target.closest("[data-project-delete]");
+    if (deleteBtn) { deleteMentorProject(deleteBtn.dataset.projectDelete); return; }
+    const restoreBtn = e.target.closest("[data-project-restore]");
+    if (restoreBtn) { restoreDeletedProject(restoreBtn.dataset.projectRestore); return; }
     const gotoBtn = e.target.closest("[data-goto]");
     if (gotoBtn) { goToTab(gotoBtn.dataset.goto); return; }
 
@@ -2231,6 +2361,7 @@ async function renderAll() {
     renderProposalsDomainFilter();
     renderHome();
     renderGroups();
+    await renderDeletedProjects();
     renderInterest();
     renderProposals();
     renderReports();
