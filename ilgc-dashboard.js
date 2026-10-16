@@ -53,157 +53,6 @@ async function loadMentorName() {
 let mentorGroups = [];
 let mentorInterestData = [];
 
-/* ======================================================
-   SHAREPOINT FILES — SUPABASE
-   Only files belonging to this mentor's assigned projects
-====================================================== */
-
-let mentorSharePointData = new Map();
-let mentorWorkspaceReports = [];
-
-async function loadMentorSharePointData() {
-    mentorSharePointData = new Map();
-    mentorWorkspaceReports = [];
-
-    // Get projects assigned to this mentor.
-    const { data: assignments, error: assignmentError } =
-        await window.supabaseClient
-            .from("project_mentors")
-            .select("project_code")
-            .eq("mentor_email", userId);
-
-    if (assignmentError) {
-        console.error(
-            "Could not load SharePoint project assignments:",
-            assignmentError
-        );
-        return;
-    }
-
-    const projectCodes = [
-        ...new Set(
-            (assignments || [])
-                .map(row => row.project_code)
-                .filter(Boolean)
-        )
-    ];
-
-    if (projectCodes.length === 0) {
-        console.log("No projects assigned to this mentor.");
-        return;
-    }
-
-    // Load workspaces for those projects.
-    const { data: workspaces, error: workspaceError } =
-        await window.supabaseClient
-            .from("project_workspaces")
-            .select(`
-                workspace_id,
-                project_code,
-                workspace_name,
-                workspace_url,
-                provider,
-                created_by,
-                created_at,
-                updated_at
-            `)
-            .in("project_code", projectCodes);
-
-    if (workspaceError) {
-        console.error(
-            "Could not load SharePoint workspaces:",
-            workspaceError
-        );
-        return;
-    }
-
-    if (!workspaces || workspaces.length === 0) {
-        console.log("No workspaces found for assigned projects.");
-        return;
-    }
-
-    const workspaceIds = workspaces.map(
-        workspace => workspace.workspace_id
-    );
-
-    // Load files and report links for those workspaces.
-    const { data: files, error: filesError } =
-        await window.supabaseClient
-            .from("workspace_files")
-            .select(`
-                file_id,
-                workspace_id,
-                title,
-                note,
-                file_url,
-                file_name,
-                file_type,
-                file_size,
-                added_by,
-                added_at
-            `)
-            .in("workspace_id", workspaceIds)
-            .order("added_at", { ascending: false });
-
-    if (filesError) {
-        console.error(
-            "Could not load SharePoint files:",
-            filesError
-        );
-        return;
-    }
-
-    const filesByWorkspace = new Map();
-
-    (files || []).forEach(file => {
-        if (!filesByWorkspace.has(file.workspace_id)) {
-            filesByWorkspace.set(file.workspace_id, []);
-        }
-
-        filesByWorkspace.get(file.workspace_id).push(file);
-    });
-
-    const projectTitles = new Map(
-        (mentorGroups || []).map(group => [
-            group.projectCode,
-            group.title
-        ])
-    );
-
-    workspaces.forEach(workspace => {
-        mentorSharePointData.set(workspace.project_code, {
-            workspace,
-            files: filesByWorkspace.get(workspace.workspace_id) || []
-        });
-    });
-
-    // Prepare the rows shown in Group Reports.
-    mentorWorkspaceReports = (files || []).map(file => {
-        const workspace = workspaces.find(
-            item => item.workspace_id === file.workspace_id
-        );
-
-        const projectCode = workspace?.project_code || "";
-
-        return {
-            id: file.file_id,
-            projectCode,
-            projectTitle:
-                projectTitles.get(projectCode) || projectCode || "Project",
-            title: file.title || file.file_name || "Untitled report",
-            note: file.note || "",
-            fileUrl: file.file_url || "",
-            addedBy: file.added_by || "Student",
-            addedAt: file.added_at || null
-        };
-    });
-
-    console.log(
-        "SharePoint files loaded for Group Reports:",
-        mentorWorkspaceReports
-    );
-}
-
 async function loadMentorGroups() {
     console.log("Loading groups for mentor:", userId);
 
@@ -834,7 +683,7 @@ function groupCardHtml(project) {
                 </div>
                 <p class="progress-label" style="margin-bottom:12px;">${project.progress}% complete</p>
                 <div class="group-card-stats">
-                    <span class="group-card-stat"><strong>${teamCount}</strong> student${teamCount !== 1 ? "s" : ""}</span>
+                    <span class="group-card-stat"><strong>${project.populationCap ? `${teamCount} / ${project.populationCap}` : teamCount}</strong> student${(project.populationCap || teamCount) !== 1 ? "s" : ""}</span>
                 </div>
                 ${next ? `<div class="group-next-milestone"><strong>Next milestone</strong>${next.title} · ${next.date}</div>` : ""}
                 <button class="btn btn-primary" data-group-open="${project.id}" style="margin-top:auto;">View Group</button>
@@ -1803,154 +1652,33 @@ function renderReportsChips() {
 }
 
 function renderReports() {
-    // Existing formal reports remain supported.
     const reports = getAllReports()
-        .filter(report =>
-            reportsActiveStatus === "All" ||
-            report.status === reportsActiveStatus
-        )
-        .sort(
-            (a, b) =>
-                new Date(b.submittedDate) -
-                new Date(a.submittedDate)
-        );
+        .filter((r) => reportsActiveStatus === "All" || r.status === reportsActiveStatus)
+        .sort((a, b) => new Date(b.submittedDate) - new Date(a.submittedDate));
 
-    // SharePoint links do not have formal review statuses.
-    // Show them under All, not under Approved/Submitted etc.
-    const sharedFiles =
-        reportsActiveStatus === "All"
-            ? mentorWorkspaceReports
-            : [];
+    const container = document.getElementById("reportsTable");
+    const empty = document.getElementById("reportsEmpty");
 
-    const container =
-        document.getElementById("reportsTable");
-
-    const empty =
-        document.getElementById("reportsEmpty");
-
-    if (!container || !empty) return;
-
-    if (reports.length === 0 && sharedFiles.length === 0) {
+    if (reports.length === 0) {
         container.innerHTML = "";
         empty.classList.remove("hidden");
-
-        empty.textContent =
-            reportsActiveStatus === "All"
-                ? "No reports or SharePoint files found for your assigned projects."
-                : "No formal reports match this status.";
-
         return;
     }
 
     empty.classList.add("hidden");
 
-    const esc = value =>
-        String(value ?? "")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#039;");
+    const allProjects = mentorGroups;
 
-    const formatDate = value => {
-        if (!value) return "—";
-
-        const date = new Date(value);
-
-        return Number.isNaN(date.getTime())
-            ? "—"
-            : date.toLocaleDateString("en-IN", {
-                day: "numeric",
-                month: "short",
-                year: "numeric"
-            });
-    };
-
-    // Student-uploaded SharePoint links from Supabase.
-    const sharedRows = sharedFiles.map(file => `
-        <div class="report-row">
-            <span class="report-project">
-                ${esc(file.projectTitle)}
-            </span>
-
-            <span class="report-cell">
-                ${esc(file.title)}
-                ${
-                    file.note
-                        ? `<small style="display:block;margin-top:4px;">
-                               ${esc(file.note)}
-                           </small>`
-                        : ""
-                }
-            </span>
-
-            <span class="report-cell">
-                ${esc(file.addedBy)}
-            </span>
-
-            <span class="report-cell">
-                ${esc(formatDate(file.addedAt))}
-            </span>
-
-            <span>
-                <span class="badge">Shared link</span>
-            </span>
-
-            <span>
-                ${
-                    file.fileUrl
-                        ? `<a
-                               class="btn btn-secondary"
-                               href="${esc(file.fileUrl)}"
-                               target="_blank"
-                               rel="noopener noreferrer">
-                               Open report ↗
-                           </a>`
-                        : "No link available"
-                }
-            </span>
-        </div>
-    `).join("");
-
-    // Existing formal report rows.
-    const formalRows = reports.map(report => {
-        const project = mentorGroups.find(
-            group =>
-                group.projectCode === report.projectId ||
-                group.id === report.projectId
-        );
-
+    const rows = reports.map((report) => {
+        const project = allProjects.find((p) => p.id === report.projectId);
         return `
-            <div class="report-row"
-                 data-report-open="${esc(report.id)}">
-
-                <span class="report-project">
-                    ${esc(project?.title || "—")}
-                </span>
-
-                <span class="report-cell">
-                    ${esc(report.reportType)}
-                </span>
-
-                <span class="report-cell">
-                    ${esc(report.submittedBy)}
-                </span>
-
-                <span class="report-cell">
-                    ${esc(report.submittedDate)}
-                </span>
-
-                <span>
-                    <span class="badge ${reportBadgeClass(report.status)}">
-                        ${esc(report.status)}
-                    </span>
-                </span>
-
-                <button
-                    class="btn btn-secondary"
-                    data-report-open="${esc(report.id)}">
-                    View
-                </button>
+            <div class="report-row" data-report-open="${report.id}">
+                <span class="report-project">${project ? project.title : "—"}</span>
+                <span class="report-cell">${report.reportType}</span>
+                <span class="report-cell">${report.submittedBy}</span>
+                <span class="report-cell">${report.submittedDate}</span>
+                <span><span class="badge ${reportBadgeClass(report.status)}">${report.status}</span></span>
+                <button class="btn btn-secondary" data-report-open="${report.id}">View</button>
             </div>
         `;
     }).join("");
@@ -1958,15 +1686,13 @@ function renderReports() {
     container.innerHTML = `
         <div class="report-row head">
             <span>Project</span>
-            <span>Report / File</span>
+            <span>Report Type</span>
             <span>Submitted By</span>
             <span>Date</span>
             <span>Status</span>
-            <span>Action</span>
+            <span></span>
         </div>
-
-        ${sharedRows}
-        ${formalRows}
+        ${rows}
     `;
 }
 
@@ -2090,7 +1816,7 @@ function requestReportChanges(reportId) {
 }
 
 /* ======================================================
-   CREATE PROJECT (and populate it across students)
+   CREATE PROJECT (with a population cap)
 ====================================================== */
 
 function slugify(title) {
@@ -2124,11 +1850,6 @@ function openCreateProjectModal() {
             </div>
 
             <div class="modal-field">
-                <label for="cpMentor">Faculty mentor</label>
-                <input type="text" id="cpMentor" required placeholder="e.g. Dr. Ananya Rao">
-            </div>
-
-            <div class="modal-field">
                 <label for="cpSummary">Summary</label>
                 <textarea id="cpSummary" required placeholder="What is this project about?"></textarea>
             </div>
@@ -2139,13 +1860,13 @@ function openCreateProjectModal() {
             </div>
 
             <div class="modal-field">
-                <label for="cpStudents">Populate across students</label>
-                <textarea id="cpStudents" placeholder="One student per line, as Name, Semester&#10;e.g.&#10;Riya Kapoor, 5&#10;Devansh Rao, 3"></textarea>
-                <p class="field-hint">Add every student you want assigned to this group's team — one per line. Leave blank to create it with no team yet.</p>
+                <label for="cpCap">Population cap</label>
+                <input type="number" id="cpCap" required min="1" step="1" placeholder="e.g. 5">
+                <p class="field-hint">The maximum number of students you can take on this project.</p>
             </div>
 
             <div class="modal-actions">
-                <button type="submit" class="btn btn-primary">Create &amp; Populate</button>
+                <button type="submit" class="btn btn-primary">Create Project</button>
             </div>
         </form>
     `;
@@ -2156,33 +1877,27 @@ function openCreateProjectModal() {
         e.preventDefault();
 
         const status = document.getElementById("cpStatus").value;
-        const team = document.getElementById("cpStudents").value
-            .split("\n")
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line) => {
-                const [name, semester] = line.split(",").map((part) => part.trim());
-                return { name: name || line, semester: Number(semester) || 1 };
-            });
+        const populationCap = Math.max(1, parseInt(document.getElementById("cpCap").value, 10) || 1);
 
         addProject({
             id: slugify(document.getElementById("cpTitle").value),
             title: document.getElementById("cpTitle").value.trim(),
             domain: document.getElementById("cpDomain").value,
             status,
-            mentor: document.getElementById("cpMentor").value.trim(),
+            mentor: mentorProfileState.name,
             summary: document.getElementById("cpSummary").value.trim(),
             expectedOutcome: document.getElementById("cpOutcome").value.trim(),
             cohort: "Batch of 2029",
             image: "images/placeholder.jpg",
             progress: status === "Completed" ? 100 : status === "Ongoing" ? 10 : 0,
             tags: [],
-            team,
+            team: [],
+            populationCap,
             origin: "mentor",
             floatedByName: mentorProfileState.name
         });
 
-        showToast(`Project created${team.length ? ` and populated with ${team.length} student${team.length === 1 ? "" : "s"} ✓` : " ✓"}`);
+        showToast(`Project created — up to ${populationCap} student${populationCap === 1 ? "" : "s"} ✓`);
         closeModal();
         renderGroups();
         renderHome();
@@ -2416,10 +2131,6 @@ rejectInterest(studentEmail, projectCode);
 async function renderAll() {
     await loadMentorName();
     await loadMentorGroups();
-
-    // NEW: load student-uploaded SharePoint files.
-    await loadMentorSharePointData();
-
     await loadMentorInterests();
     await loadProposals();
 
