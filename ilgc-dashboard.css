@@ -331,3 +331,9 @@
 .group-card-actions { display:flex; justify-content:flex-end; gap:10px; padding:0 22px 18px; }
 .btn-danger { border:1px solid #b42318; background:#fff; color:#b42318; border-radius:8px; padding:9px 14px; font:inherit; font-weight:700; cursor:pointer; }
 .btn-danger:hover { background:#fff1f0; }
+
+
+/* Archive / delete project card actions */
+.mentor-project-card .group-card-actions { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 20px 18px; }
+.mentor-project-card .group-card-actions .btn { cursor: pointer; }
+@media (max-width: 760px) { .group-grid { grid-template-columns: 1fr; } }
