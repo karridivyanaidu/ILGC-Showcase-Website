@@ -1873,31 +1873,83 @@ function openCreateProjectModal() {
 
     modalOverlay.classList.remove("hidden");
 
-    document.getElementById("createProjectForm").addEventListener("submit", (e) => {
+    document.getElementById("createProjectForm").addEventListener("submit", async (e) => {
         e.preventDefault();
 
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Creating…";
+
+        const title = document.getElementById("cpTitle").value.trim();
+        const domainName = document.getElementById("cpDomain").value;
         const status = document.getElementById("cpStatus").value;
+        const summary = document.getElementById("cpSummary").value.trim();
+        const outcome = document.getElementById("cpOutcome").value.trim();
         const populationCap = Math.max(1, parseInt(document.getElementById("cpCap").value, 10) || 1);
 
-        addProject({
-            id: slugify(document.getElementById("cpTitle").value),
-            title: document.getElementById("cpTitle").value.trim(),
-            domain: document.getElementById("cpDomain").value,
-            status,
-            mentor: mentorProfileState.name,
-            summary: document.getElementById("cpSummary").value.trim(),
-            expectedOutcome: document.getElementById("cpOutcome").value.trim(),
-            cohort: "Batch of 2029",
-            image: "images/placeholder.jpg",
-            progress: status === "Completed" ? 100 : status === "Ongoing" ? 10 : 0,
-            tags: [],
-            team: [],
-            populationCap,
-            origin: "mentor",
-            floatedByName: mentorProfileState.name
-        });
+        // Short unique code, e.g. MP4K9QZ
+        const projectCode = "MP" + Date.now().toString(36).toUpperCase().slice(-5);
 
-        showToast(`Project created — up to ${populationCap} student${populationCap === 1 ? "" : "s"} ✓`);
+        // Look up the real domain_id for the chosen domain name
+        const { data: domainRow } = await window.supabaseClient
+            .from("project_domains")
+            .select("domain_id")
+            .eq("name", domainName)
+            .maybeSingle();
+        const domainId = domainRow ? domainRow.domain_id : null;
+
+        const baseRow = {
+            project_code: projectCode,
+            title,
+            description: summary,
+            summary,
+            expected_outcome: outcome,
+            domain_id: domainId,
+            status: status.toLowerCase(),
+            progress: status === "Completed" ? 100 : status === "Ongoing" ? 10 : 0,
+            academic_year: String(new Date().getFullYear()),
+            created_by: userId
+        };
+
+        // Try with population_cap; if that column hasn't been added yet, retry without it.
+        let { error } = await window.supabaseClient
+            .from("projects")
+            .insert({ ...baseRow, population_cap: populationCap });
+
+        let capSaved = true;
+        if (error && (error.code === "42703" || error.code === "PGRST204")) {
+            capSaved = false;
+            ({ error } = await window.supabaseClient.from("projects").insert(baseRow));
+        }
+
+        if (error) {
+            console.error("Could not create project:", error);
+            showToast("Could not create the project — check console");
+            submitBtn.disabled = false;
+            submitBtn.textContent = "Create Project";
+            return;
+        }
+
+        // Link the domain and this mentor (students' Discover tab reads these).
+        if (domainId) {
+            const { error: mapError } = await window.supabaseClient
+                .from("project_domain_map")
+                .insert({ project_code: projectCode, domain_id: domainId });
+            if (mapError) console.error("Could not link project domain:", mapError);
+        }
+
+        const { error: mentorError } = await window.supabaseClient
+            .from("project_mentors")
+            .insert({ project_code: projectCode, mentor_email: userId });
+        if (mentorError) console.error("Could not link project mentor:", mentorError);
+
+        await loadProjectsFromSupabase();
+
+        showToast(
+            capSaved
+                ? `Project created — now visible to all students (cap: ${populationCap}) ✓`
+                : "Project created and visible to students — run the SQL migration to save the population cap"
+        );
         closeModal();
         renderGroups();
         renderHome();
