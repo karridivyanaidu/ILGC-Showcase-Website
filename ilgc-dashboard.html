@@ -46,6 +46,7 @@
     <nav class="tabs" id="tabs">
       <button class="tab" data-tab="home" data-active="true">Dashboard</button>
       <button class="tab" data-tab="groups">My Groups</button>
+      <button class="tab" data-tab="deleted">Deleted Projects</button>
       <button class="tab" data-tab="interest">Student Interest</button>
       <button class="tab" data-tab="proposals">Project Proposals</button>
       <button class="tab" data-tab="reports">Group Reports</button>
@@ -111,6 +112,19 @@
 
     </div>
 
+  </section>
+
+  <!-- ============ DELETED PROJECTS ============ -->
+  <section class="view" id="view-deleted">
+    <div class="view-container">
+      <div class="view-heading">
+        <p class="eyebrow">PROJECT MANAGEMENT</p>
+        <h1>Deleted Projects</h1>
+        <p class="view-subtitle">Projects deleted from My Groups. Restore a project to return it to your groups.</p>
+      </div>
+      <div class="group-grid" id="deletedProjectsGrid"></div>
+      <p id="deletedProjectsEmpty" class="empty-state hidden">No deleted projects.</p>
+    </div>
   </section>
 
   <!-- ============ STUDENT INTEREST ============ -->
