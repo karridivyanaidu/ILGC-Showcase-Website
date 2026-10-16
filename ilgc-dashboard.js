@@ -53,213 +53,6 @@ async function loadMentorName() {
 let mentorGroups = [];
 let mentorInterestData = [];
 
-
-/* ======================================================
-   LOAD SHAREPOINT WORKSPACES AND FILES FROM SUPABASE
-   Only projects assigned to this mentor
-====================================================== */
-
-let mentorWorkspaceReports = [];
-let mentorWorkspaceData = new Map();
-
-async function loadMentorSharePointData() {
-    mentorWorkspaceReports = [];
-    mentorWorkspaceData = new Map();
-
-    console.log(
-        "Loading SharePoint reports for mentor:",
-        userId
-    );
-
-    // 1. Get projects assigned to this mentor
-    const { data: assignments, error: assignmentError } =
-        await window.supabaseClient
-            .from("project_mentors")
-            .select("project_code")
-            .eq("mentor_email", userId);
-
-    if (assignmentError) {
-        console.error(
-            "Could not load mentor assignments for reports:",
-            assignmentError
-        );
-        return;
-    }
-
-    const projectCodes = [
-        ...new Set(
-            (assignments || [])
-                .map((row) => row.project_code)
-                .filter(Boolean)
-        )
-    ];
-
-    if (projectCodes.length === 0) {
-        console.log("No projects assigned to this mentor.");
-        return;
-    }
-
-    // 2. Get workspaces belonging to assigned projects
-    const { data: workspaces, error: workspaceError } =
-        await window.supabaseClient
-            .from("project_workspaces")
-            .select(`
-                workspace_id,
-                project_code,
-                workspace_name,
-                workspace_url,
-                provider,
-                created_by,
-                created_at,
-                updated_at
-            `)
-            .in("project_code", projectCodes);
-
-    if (workspaceError) {
-        console.error(
-            "Could not load SharePoint workspaces:",
-            workspaceError
-        );
-        return;
-    }
-
-    const workspaceRows = workspaces || [];
-
-    if (workspaceRows.length === 0) {
-        console.log("No workspaces found for assigned projects.");
-        return;
-    }
-
-    // 3. Get the files uploaded to these workspaces
-    const workspaceIds = workspaceRows
-        .map((workspace) => workspace.workspace_id)
-        .filter(Boolean);
-
-    const { data: files, error: filesError } =
-        await window.supabaseClient
-            .from("workspace_files")
-            .select(`
-                file_id,
-                workspace_id,
-                title,
-                note,
-                file_url,
-                file_name,
-                file_type,
-                file_size,
-                added_by,
-                added_at
-            `)
-            .in("workspace_id", workspaceIds)
-            .order("added_at", { ascending: false });
-
-    if (filesError) {
-        console.error(
-            "Could not load SharePoint report files:",
-            filesError
-        );
-        return;
-    }
-
-    // 4. Fetch project titles
-    const { data: projects, error: projectsError } =
-        await window.supabaseClient
-            .from("projects")
-            .select("project_code, title")
-            .in("project_code", projectCodes);
-
-    if (projectsError) {
-        console.error(
-            "Could not load report project titles:",
-            projectsError
-        );
-    }
-
-    const projectTitleMap = new Map(
-        (projects || []).map((project) => [
-            project.project_code,
-            project.title
-        ])
-    );
-
-    const workspaceMap = new Map(
-        workspaceRows.map((workspace) => [
-            workspace.workspace_id,
-            workspace
-        ])
-    );
-
-    // 5. Keep workspace data for the group-detail modal
-    workspaceRows.forEach((workspace) => {
-        mentorWorkspaceData.set(
-            workspace.project_code,
-            {
-                ...workspace,
-                files: []
-            }
-        );
-    });
-
-    // 6. Build the report list for Group Reports
-    mentorWorkspaceReports = (files || [])
-        .map((file) => {
-            const workspace =
-                workspaceMap.get(file.workspace_id);
-
-            if (!workspace) return null;
-
-            const projectCode = workspace.project_code;
-            const projectTitle =
-                projectTitleMap.get(projectCode) ||
-                `Project ${projectCode}`;
-
-            const workspaceData =
-                mentorWorkspaceData.get(projectCode);
-
-            if (workspaceData) {
-                workspaceData.files.push(file);
-            }
-
-            return {
-                id: `workspace-${file.file_id}`,
-                fileId: file.file_id,
-                projectCode,
-                projectTitle,
-                workspaceName:
-                    workspace.workspace_name ||
-                    "SharePoint workspace",
-                reportType: file.title || "Project report",
-                submittedBy: file.added_by || "Unknown",
-                submittedDate: file.added_at
-                    ? new Date(file.added_at).toLocaleDateString(
-                        "en-IN",
-                        {
-                            day: "numeric",
-                            month: "short",
-                            year: "numeric"
-                        }
-                    )
-                    : "—",
-                status: "Submitted",
-                preview: file.note || "",
-                fileUrl: file.file_url || "",
-                isWorkspaceFile: true
-            };
-        })
-        .filter(Boolean);
-
-    console.log(
-        "Mentor SharePoint workspaces:",
-        mentorWorkspaceData
-    );
-
-    console.log(
-        "Mentor SharePoint reports:",
-        mentorWorkspaceReports
-    );
-}
-
-
 async function loadMentorGroups() {
     console.log("Loading groups for mentor:", userId);
 
@@ -351,25 +144,25 @@ async function loadMentorGroups() {
 
     console.log("Mentor project members:", members);
 
-    if (!members || members.length === 0) {
-        mentorGroups = [];
-        return;
-    }
+    // NOTE: a group with no students yet must still show up for its mentor,
+    // so we no longer bail out when there are no members.
+    const memberList = members || [];
 
     // --------------------------------------------------
     // 4. Get student names
     // --------------------------------------------------
     const studentEmails = [
         ...new Set(
-            members.map((member) => member.student_email)
+            memberList.map((member) => member.student_email)
         )
     ];
 
-    const { data: students, error: studentsError } =
-        await window.supabaseClient
+    const { data: students, error: studentsError } = studentEmails.length
+        ? await window.supabaseClient
             .from("users")
             .select("email, name")
-            .in("email", studentEmails);
+            .in("email", studentEmails)
+        : { data: [], error: null };
 
     if (studentsError) {
         console.error(
@@ -404,16 +197,30 @@ async function loadMentorGroups() {
     // --------------------------------------------------
     const groupsMap = new Map();
 
-    members.forEach((member) => {
-        if (!groupsMap.has(member.project_code)) {
-            const project = projectMap.get(member.project_code);
+    // Optional population cap (column may not exist yet - never let it break loading)
+    let capByCode = new Map();
+    try {
+        const { data: capRows, error: capError } = await window.supabaseClient
+            .from("projects")
+            .select("project_code, population_cap")
+            .in("project_code", projectCodes);
+        if (!capError && capRows) {
+            capByCode = new Map(capRows.map((r) => [r.project_code, r.population_cap]));
+        }
+    } catch (e) { /* column not added yet */ }
 
-            groupsMap.set(member.project_code, {
-                projectCode: member.project_code,
+    // One group per project this mentor is assigned to, members or not.
+    projectCodes.forEach((code) => {
+        if (!groupsMap.has(code)) {
+            const project = projectMap.get(code);
+
+            groupsMap.set(code, {
+                projectCode: code,
+                populationCap: capByCode.get(code) || null,
 
                 title:
                     project?.title ||
-                    `Project ${member.project_code}`,
+                    `Project ${code}`,
 
                 description:
                     project?.description ||
@@ -433,10 +240,14 @@ async function loadMentorGroups() {
                 students: []
             });
         }
+    });
 
+    memberList.forEach((member) => {
         const student = studentMap.get(member.student_email);
+        const group = groupsMap.get(member.project_code);
+        if (!group) return;
 
-        groupsMap.get(member.project_code).students.push({
+        group.students.push({
             email: member.student_email,
             name: student?.name || member.student_email,
             role: member.member_role,
@@ -1068,11 +879,11 @@ function renderGroups() {
                     }
 
                     <div class="students-heading">
-                        STUDENTS (${group.students.length})
+                        STUDENTS (${group.students.length}${group.populationCap ? ` / ${group.populationCap}` : ""})
                     </div>
 
                     <div class="student-list">
-                        ${studentsHtml}
+                        ${studentsHtml || `<p class="field-hint">No students have joined yet.</p>`}
                     </div>
 
                 </div>
@@ -1858,113 +1669,34 @@ function renderReportsChips() {
     `).join("");
 }
 
-
 function renderReports() {
-    // Keep existing browser-stored reports and add
-    // SharePoint files retrieved from Supabase.
-    const allReports = [
-        ...getAllReports(),
-        ...mentorWorkspaceReports
-    ];
+    const reports = getAllReports()
+        .filter((r) => reportsActiveStatus === "All" || r.status === reportsActiveStatus)
+        .sort((a, b) => new Date(b.submittedDate) - new Date(a.submittedDate));
 
-    const reports = allReports
-        .filter((report) =>
-            reportsActiveStatus === "All" ||
-            report.status === reportsActiveStatus
-        )
-        .sort((a, b) => {
-            const dateA = a.isWorkspaceFile
-                ? new Date(a.submittedDate)
-                : new Date(a.submittedDate);
-
-            const dateB = b.isWorkspaceFile
-                ? new Date(b.submittedDate)
-                : new Date(b.submittedDate);
-
-            return dateB - dateA;
-        });
-
-    const container =
-        document.getElementById("reportsTable");
-
-    const empty =
-        document.getElementById("reportsEmpty");
-
-    if (!container || !empty) return;
+    const container = document.getElementById("reportsTable");
+    const empty = document.getElementById("reportsEmpty");
 
     if (reports.length === 0) {
         container.innerHTML = "";
-        empty.textContent =
-            "No reports or SharePoint files found for your assigned projects.";
         empty.classList.remove("hidden");
         return;
     }
 
     empty.classList.add("hidden");
 
-    const esc = (value) =>
-        String(value ?? "")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#039;");
+    const allProjects = mentorGroups;
 
     const rows = reports.map((report) => {
-        const project = report.isWorkspaceFile
-            ? null
-            : mentorGroups.find(
-                (group) =>
-                    group.id === report.projectId ||
-                    group.projectCode === report.projectCode
-            );
-
-        const projectTitle = report.isWorkspaceFile
-            ? report.projectTitle
-            : project?.title || "—";
-
-        const openButton = report.isWorkspaceFile
-            ? (
-                report.fileUrl
-                    ? `<a
-                        class="btn btn-secondary"
-                        href="${esc(report.fileUrl)}"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style="text-decoration:none;"
-                    >Open report ↗</a>`
-                    : `<span>No link provided</span>`
-            )
-            : `<button
-                    class="btn btn-secondary"
-                    data-report-open="${esc(report.id)}"
-               >View</button>`;
-
+        const project = allProjects.find((p) => p.id === report.projectId);
         return `
-            <div class="report-row">
-                <span class="report-project">
-                    ${esc(projectTitle)}
-                </span>
-
-                <span class="report-cell">
-                    ${esc(report.reportType)}
-                </span>
-
-                <span class="report-cell">
-                    ${esc(report.submittedBy)}
-                </span>
-
-                <span class="report-cell">
-                    ${esc(report.submittedDate)}
-                </span>
-
-                <span>
-                    <span class="badge ${reportBadgeClass(report.status)}">
-                        ${esc(report.status)}
-                    </span>
-                </span>
-
-                ${openButton}
+            <div class="report-row" data-report-open="${report.id}">
+                <span class="report-project">${project ? project.title : "—"}</span>
+                <span class="report-cell">${report.reportType}</span>
+                <span class="report-cell">${report.submittedBy}</span>
+                <span class="report-cell">${report.submittedDate}</span>
+                <span><span class="badge ${reportBadgeClass(report.status)}">${report.status}</span></span>
+                <button class="btn btn-secondary" data-report-open="${report.id}">View</button>
             </div>
         `;
     }).join("");
@@ -1978,11 +1710,9 @@ function renderReports() {
             <span>Status</span>
             <span></span>
         </div>
-
         ${rows}
     `;
 }
-
 
 function openReportDetailModal(reportId) {
     const report = getAllReports().find((r) => r.id === reportId);
@@ -2112,7 +1842,37 @@ function slugify(title) {
     return `${base || "project"}-${Date.now().toString(36).slice(-4)}`;
 }
 
-function openCreateProjectModal() {
+async function loadFormTags() {
+    // Real project tags from Supabase (tags table). Tolerates id column being tag_id or id.
+    const { data, error } = await window.supabaseClient
+        .from("tags")
+        .select("*")
+        .order("name");
+
+    if (error) {
+        console.error("Could not load project tags:", error);
+        return [];
+    }
+    return (data || []).map((t) => ({
+        id: t.tag_id ?? t.id,
+        name: t.name,
+        domainId: t.domain_id || null
+    })).filter((t) => t.id && t.name);
+}
+
+async function openCreateProjectModal() {
+    const formTags = await loadFormTags();
+
+    const tagPickerHtml = formTags.length
+        ? `<div id="cpTags" style="display:flex;flex-wrap:wrap;gap:8px;">
+               ${formTags.map((t) => `
+                   <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid #D7E5E3;border-radius:999px;font-size:13px;cursor:pointer;">
+                       <input type="checkbox" name="cpTag" value="${t.id}"> ${t.name}
+                   </label>`).join("")}
+           </div>
+           <p class="field-hint">Pick every tag that fits this project.</p>`
+        : `<p class="field-hint">No project tags exist yet — the ILGC faculty can add them under Project Tags.</p>`;
+
     modalBody.innerHTML = `
         <p class="modal-eyebrow">Institute-wide project</p>
         <h2 class="modal-title">Create Project</h2>
@@ -2124,10 +1884,8 @@ function openCreateProjectModal() {
             </div>
 
             <div class="modal-field">
-                <label for="cpDomain">Domain</label>
-                <select id="cpDomain">
-                    ${FORM_DOMAINS.map((d) => `<option value="${d}">${d}</option>`).join("")}
-                </select>
+                <label>Project tags</label>
+                ${tagPickerHtml}
             </div>
 
             <div class="modal-field">
@@ -2169,7 +1927,8 @@ function openCreateProjectModal() {
         submitBtn.textContent = "Creating…";
 
         const title = document.getElementById("cpTitle").value.trim();
-        const domainName = document.getElementById("cpDomain").value;
+        const selectedTagIds = [...document.querySelectorAll('input[name="cpTag"]:checked')].map((c) => c.value);
+        const selectedTags = formTags.filter((t) => selectedTagIds.includes(String(t.id)));
         const status = document.getElementById("cpStatus").value;
         const summary = document.getElementById("cpSummary").value.trim();
         const outcome = document.getElementById("cpOutcome").value.trim();
@@ -2178,13 +1937,8 @@ function openCreateProjectModal() {
         // Short unique code, e.g. MP4K9QZ
         const projectCode = "MP" + Date.now().toString(36).toUpperCase().slice(-5);
 
-        // Look up the real domain_id for the chosen domain name
-        const { data: domainRow } = await window.supabaseClient
-            .from("project_domains")
-            .select("domain_id")
-            .eq("name", domainName)
-            .maybeSingle();
-        const domainId = domainRow ? domainRow.domain_id : null;
+        // The project's domain comes from its tags (each tag belongs to a domain).
+        const domainId = (selectedTags.find((t) => t.domainId) || {}).domainId || null;
 
         const baseRow = {
             project_code: projectCode,
@@ -2226,12 +1980,20 @@ function openCreateProjectModal() {
             if (mapError) console.error("Could not link project domain:", mapError);
         }
 
+        if (selectedTags.length) {
+            const { error: tagError } = await window.supabaseClient
+                .from("project_tags")
+                .insert(selectedTags.map((t) => ({ project_code: projectCode, tag_id: t.id })));
+            if (tagError) console.error("Could not save project tags:", tagError);
+        }
+
         const { error: mentorError } = await window.supabaseClient
             .from("project_mentors")
             .insert({ project_code: projectCode, mentor_email: userId });
         if (mentorError) console.error("Could not link project mentor:", mentorError);
 
         await loadProjectsFromSupabase();
+        await loadMentorGroups();
 
         showToast(
             capSaved
@@ -2471,10 +2233,6 @@ rejectInterest(studentEmail, projectCode);
 async function renderAll() {
     await loadMentorName();
     await loadMentorGroups();
-
-    // NEW: load SharePoint links from Supabase
-    await loadMentorSharePointData();
-
     await loadMentorInterests();
     await loadProposals();
 
