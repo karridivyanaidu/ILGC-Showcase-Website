@@ -31,6 +31,89 @@ let studentDepartment = "";
 let studentRollNumber = "";
 let studentProjects = [];
 let discoverProjects = [];
+/* ======================================================
+   SHAREPOINT WORKSPACES — SUPABASE
+====================================================== */
+
+let studentWorkspaceData = new Map();
+
+async function loadStudentWorkspaces() {
+    studentWorkspaceData = new Map();
+
+    const projectCodes = [
+        ...new Set(
+            studentProjects
+                .map(project => project.projectCode)
+                .filter(Boolean)
+        )
+    ];
+
+    if (projectCodes.length === 0) return;
+
+    const { data: workspaces, error } =
+        await window.supabaseClient
+            .from("project_workspaces")
+            .select(`
+                workspace_id,
+                project_code,
+                workspace_name,
+                workspace_url,
+                provider,
+                created_by,
+                created_at
+            `)
+            .in("project_code", projectCodes);
+
+    if (error) {
+        console.error("Could not load student workspaces:", error);
+        return;
+    }
+
+    const workspaceIds = (workspaces || [])
+        .map(workspace => workspace.workspace_id);
+
+    let files = [];
+
+    if (workspaceIds.length > 0) {
+        const { data, error: filesError } =
+            await window.supabaseClient
+                .from("workspace_files")
+                .select(`
+                    file_id,
+                    workspace_id,
+                    title,
+                    note,
+                    file_url,
+                    added_by,
+                    added_at
+                `)
+                .in("workspace_id", workspaceIds)
+                .order("added_at", { ascending: false });
+
+        if (filesError) {
+            console.error("Could not load student workspace files:", filesError);
+            return;
+        }
+
+        files = data || [];
+    }
+
+    (workspaces || []).forEach(workspace => {
+        studentWorkspaceData.set(workspace.project_code, {
+            workspace,
+            files: files
+                .filter(file => file.workspace_id === workspace.workspace_id)
+                .map(file => ({
+                    id: file.file_id,
+                    title: file.title || "",
+                    note: file.note || "",
+                    link: file.file_url || "",
+                    addedBy: file.added_by || "Student",
+                    addedAt: file.added_at
+                }))
+        });
+    });
+}
 async function loadStudentProfile() {
     console.log("Loading student profile for:", userId);
 
@@ -1206,7 +1289,8 @@ function milestoneListHtml(projectId) {
 }
 
 function sharePointHtml(project) {
-    const sp = getSharePoint(project.id);
+    const data = studentWorkspaceData.get(project.projectCode);
+    const sp = data || null;
 
     if (!sp) {
         return `
@@ -1214,30 +1298,59 @@ function sharePointHtml(project) {
                 <div class="mp-sharepoint-head">
                     <div>
                         <p class="mp-block-title">SharePoint workspace</p>
-                        <p class="mp-block-sub">Create a shared space to post reports. Your faculty mentor and the ILGC faculty will be able to view whatever you add here.</p>
+                        <p class="mp-block-sub">
+                            Create a shared space to post reports. Your teammates,
+                            assigned project mentor, and ILGC faculty can view
+                            the links you share, subject to their access permissions.
+                        </p>
                     </div>
                 </div>
-                <button class="btn btn-primary" data-sp-create="${project.id}">+ Create SharePoint</button>
+
+                <button
+                    class="btn btn-primary"
+                    data-sp-create="${project.projectCode}">
+                    + Create SharePoint
+                </button>
             </div>
         `;
     }
 
     const filesHtml = sp.files.length
-        ? sp.files.map((f) => {
-            const date = new Date(f.addedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-            const linkHtml = f.link
-                ? `<a class="mp-file-link" href="${f.link}" target="_blank" rel="noopener">Open report ↗</a>`
-                : "";
+        ? sp.files.map(file => {
+            const date = file.addedAt
+                ? new Date(file.addedAt).toLocaleDateString("en-IN", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric"
+                })
+                : "—";
+
             return `
                 <div class="mp-file">
                     <div class="mp-file-main">
-                        <p class="mp-file-title">${f.title}</p>
-                        ${f.note ? `<p class="mp-file-note">${f.note}</p>` : ""}
-                        <p class="mp-file-meta">Added by ${f.addedBy} · ${date}</p>
+                        <p class="mp-file-title">${file.title}</p>
+                        ${file.note
+                            ? `<p class="mp-file-note">${file.note}</p>`
+                            : ""}
+                        <p class="mp-file-meta">
+                            Added by ${file.addedBy} · ${date}
+                        </p>
                     </div>
+
                     <div class="mp-file-actions">
-                        ${linkHtml}
-                        <button class="btn btn-danger btn-small" data-sp-remove="${project.id}|${f.id}">Remove</button>
+                        ${file.link
+                            ? `<a class="mp-file-link"
+                                  href="${file.link}"
+                                  target="_blank"
+                                  rel="noopener noreferrer">
+                                  Open report ↗
+                               </a>`
+                            : ""}
+                        <button
+                            class="btn btn-danger btn-small"
+                            data-sp-remove="${project.projectCode}|${file.id}">
+                            Remove
+                        </button>
                     </div>
                 </div>
             `;
@@ -1249,21 +1362,137 @@ function sharePointHtml(project) {
             <div class="mp-sharepoint-head">
                 <div>
                     <p class="mp-block-title">SharePoint workspace</p>
-                    <p class="mp-block-sub">Visible to you, your teammates, ${project.mentor}, and the ILGC faculty.</p>
+                    <p class="mp-block-sub">
+                        Visible to your teammates, assigned project mentor,
+                        and ILGC faculty, subject to their permissions.
+                    </p>
                 </div>
                 <span class="badge badge-accepted">Active</span>
             </div>
 
             <div class="mp-file-list">${filesHtml}</div>
 
-            <form class="mp-report-form" data-sp-form="${project.id}">
-                <input type="text" data-sp-title placeholder="Report title (e.g. Progress Report — Sprint 3)" required>
-                <textarea data-sp-note placeholder="Short note on what's in this report (optional)"></textarea>
-                <input type="url" data-sp-link placeholder="Link to the report file (Google Doc, Drive, etc.) — optional">
-                <button type="submit" class="btn btn-primary">+ Add Report</button>
+            <form class="mp-report-form"
+                  data-sp-form="${project.projectCode}">
+                <input
+                    type="text"
+                    data-sp-title
+                    placeholder="Report title"
+                    required>
+
+                <textarea
+                    data-sp-note
+                    placeholder="Short note (optional)"></textarea>
+
+                <input
+                    type="url"
+                    data-sp-link
+                    placeholder="SharePoint report URL"
+                    required>
+
+                <button type="submit" class="btn btn-primary">
+                    + Add Report
+                </button>
             </form>
         </div>
     `;
+}
+
+async function createSupabaseWorkspace(projectCode) {
+    const existing = studentWorkspaceData.get(projectCode);
+
+    if (existing) {
+        showToast("Workspace already exists.");
+        return;
+    }
+
+    const project = studentProjects.find(
+        item => item.projectCode === projectCode
+    );
+
+    if (!project) {
+        showToast("Project not found.");
+        return;
+    }
+
+    const { error } = await window.supabaseClient
+        .from("project_workspaces")
+        .insert({
+            project_code: projectCode,
+            workspace_name: `${project.title} workspace`,
+            provider: "sharepoint",
+            created_by: userId
+        });
+
+    if (error) {
+        console.error("Could not create workspace:", error);
+        showToast("Could not create workspace. Check Console.");
+        return;
+    }
+
+    await loadStudentWorkspaces();
+    renderMyProjectsFull();
+    showToast("SharePoint workspace created ✓");
+}
+
+async function addSupabaseWorkspaceFile(projectCode, {
+    title,
+    note,
+    link
+}) {
+    let workspaceData = studentWorkspaceData.get(projectCode);
+
+    if (!workspaceData) {
+        await createSupabaseWorkspace(projectCode);
+        workspaceData = studentWorkspaceData.get(projectCode);
+    }
+
+    if (!workspaceData?.workspace?.workspace_id) {
+        showToast("Could not find the workspace. Please try again.");
+        return;
+    }
+
+    const { error } = await window.supabaseClient
+        .from("workspace_files")
+        .insert({
+            workspace_id: workspaceData.workspace.workspace_id,
+            title,
+            note: note || null,
+            file_url: link,
+            added_by: userId
+        });
+
+    if (error) {
+        console.error("Could not save workspace report:", error);
+        showToast("Could not save report. Check Console.");
+        return;
+    }
+
+    await loadStudentWorkspaces();
+    renderMyProjectsFull();
+    showToast("Report saved ✓");
+}
+
+async function removeSupabaseWorkspaceFile(projectCode, fileId) {
+    const workspaceData = studentWorkspaceData.get(projectCode);
+
+    if (!workspaceData) return;
+
+    const { error } = await window.supabaseClient
+        .from("workspace_files")
+        .delete()
+        .eq("file_id", fileId)
+        .eq("workspace_id", workspaceData.workspace.workspace_id);
+
+    if (error) {
+        console.error("Could not remove workspace report:", error);
+        showToast("Could not remove report. Check Console.");
+        return;
+    }
+
+    await loadStudentWorkspaces();
+    renderMyProjectsFull();
+    showToast("Report removed ✓");
 }
 
 function myProjectFullCardHtml(project) {
@@ -1527,7 +1756,7 @@ document.getElementById("discoverMentorSelect").addEventListener("change", (e) =
     renderDiscover();
 });
 
-document.addEventListener("click", (e) => {
+document.addEventListener("click", async (e) => {
     const expressBtn = e.target.closest("[data-express]");
 
     if (expressBtn) {
@@ -1551,47 +1780,44 @@ document.addEventListener("click", (e) => {
 
     const spCreate = e.target.closest("[data-sp-create]");
 
-    if (spCreate) {
-        createSharePoint(
-            spCreate.dataset.spCreate,
-            studentName
-        );
+if (spCreate) {
+    await createSupabaseWorkspace(spCreate.dataset.spCreate);
+    return;
+}
 
-        showToast("SharePoint workspace created ✓");
-        renderMyProjectsFull();
-        return;
-    }
+const spRemove = e.target.closest("[data-sp-remove]");
 
-    const spRemove = e.target.closest("[data-sp-remove]");
+if (spRemove) {
+    const [projectCode, fileId] =
+        spRemove.dataset.spRemove.split("|");
 
-    if (spRemove) {
-        const [projectId, fileId] =
-            spRemove.dataset.spRemove.split("|");
-
-        removeSharePointFile(projectId, fileId);
-
-        showToast("Report removed");
-        renderMyProjectsFull();
-        return;
-    }
+    await removeSupabaseWorkspaceFile(projectCode, fileId);
+    return;
+}
 });
 
 /* SharePoint "add report" form submissions */
-document.addEventListener("submit", (e) => {
+document.addEventListener("submit", async (e) => {
     const form = e.target.closest("[data-sp-form]");
     if (!form) return;
+
     e.preventDefault();
 
-    const projectId = form.dataset.spForm;
-    const title = form.querySelector("[data-sp-title]").value;
-    const note = form.querySelector("[data-sp-note]").value;
-    const link = form.querySelector("[data-sp-link]").value;
+    const projectCode = form.dataset.spForm;
+    const title = form.querySelector("[data-sp-title]").value.trim();
+    const note = form.querySelector("[data-sp-note]").value.trim();
+    const link = form.querySelector("[data-sp-link]").value.trim();
 
-    if (!title.trim()) return;
+    if (!title || !link) {
+        showToast("Please enter a report title and link.");
+        return;
+    }
 
-    addSharePointFile(projectId, { title, note, link, addedBy: studentName });
-    showToast("Report added to SharePoint ✓");
-    renderMyProjectsFull();
+    await addSupabaseWorkspaceFile(projectCode, {
+        title,
+        note,
+        link
+    });
 });
 
 
@@ -1991,7 +2217,9 @@ async function initStudentDashboard() {
 
     studentProjects = await loadStudentProjects();
 
-    await loadDiscoverProjects();
+await loadStudentWorkspaces();
+
+await loadDiscoverProjects();
 
     await Promise.all([
         loadFloatDomains(),
