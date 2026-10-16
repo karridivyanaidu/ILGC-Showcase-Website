@@ -3,7 +3,7 @@
    Used by index.html (visitor) and student-dashboard.html
    Stands in for the real project database until the
    backend/API layer exists.
-====================================================== */
+================================================ ====== */
 
 const PROJECTS = [
     {
