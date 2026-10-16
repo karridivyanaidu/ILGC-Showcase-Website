@@ -428,3 +428,52 @@
     .mentor-project-card .group-card-actions { flex-direction: column; align-items: stretch; }
     .mentor-project-card .group-card-actions .btn { width: 100%; }
 }
+
+/* Force project actions to the bottom of each card, even if the HTML
+   places the action row before the project details. */
+.mentor-project-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 360px;
+}
+
+.mentor-project-card > .group-card-top {
+    order: 1;
+}
+
+.mentor-project-card > .group-card-body {
+    order: 2;
+    flex: 1 1 auto;
+}
+
+.mentor-project-card > .group-card-actions {
+    order: 3;
+    margin-top: auto;
+}
+
+/* Final layout override: Archive/Delete footer mirrors the Restore footer. */
+article.mentor-project-card {
+    display: flex !important;
+    flex-direction: column !important;
+    min-height: 360px;
+}
+
+article.mentor-project-card > .group-card-top {
+    order: 1 !important;
+}
+
+article.mentor-project-card > .group-card-body {
+    order: 2 !important;
+    flex: 1 1 auto !important;
+}
+
+article.mentor-project-card > .group-card-actions {
+    order: 3 !important;
+    display: flex !important;
+    justify-content: flex-end !important;
+    align-items: center !important;
+    margin-top: auto !important;
+    padding: 14px 20px 18px !important;
+    border-top: 1px solid #e8eff0 !important;
+    background: linear-gradient(180deg, #ffffff 0%, #fbfdfd 100%) !important;
+}
