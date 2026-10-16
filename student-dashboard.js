@@ -1647,20 +1647,42 @@ async function loadFloatDomains() {
     floatDomains = [...new Set((data || []).map((d) => d.name).filter(Boolean))];
 }
 
+// Student -> ILGC faculty -> mentors -> everyone.
+//   pending        : waiting for ILGC faculty
+//   approved       : faculty said yes, now with the mentors
+//   accepted       : a mentor accepted it  (visible to ALL students)
+//   needs_revision : mentor asked for changes
+//   rejected       : declined by faculty or by a mentor
+const IDEA_STAGE_LABELS = {
+    pending: "Pending",
+    approved: "With Mentors",
+    accepted: "Accepted",
+    needs_revision: "Needs Revision",
+    rejected: "Rejected"
+};
+
 function mapProposalRow(r, nameByEmail, domainNameById) {
     const studentEmail = r.submitted_by || "";
-    const status = String(r.status || "pending");
+    const rawStatus = String(r.status || "pending").toLowerCase();
+    const rejectedByMentor = rawStatus === "rejected" && !!r.mentor_reviewed_at;
+    const feedback = [
+        r.review_comment ? `Faculty: ${r.review_comment}` : "",
+        r.mentor_feedback ? `Mentor: ${r.mentor_feedback}` : ""
+    ].filter(Boolean).join(" · ");
     return {
         id: r.proposal_id,
         title: r.title || "Untitled idea",
         studentUserId: studentEmail,
         studentName: nameByEmail.get(studentEmail) || studentEmail || "A student",
         domain: domainNameById.get(r.domain_id) || "General",
-        targetMentor: "ILGC Faculty",
+        targetMentor: rawStatus === "pending" || (rawStatus === "rejected" && !rejectedByMentor)
+            ? "ILGC Faculty"
+            : "Mentors",
         proposedDate: String(r.created_at || "").slice(0, 10),
         reviewedDate: String(r.reviewed_at || "").slice(0, 10),
-        status: status.split(/[_\s]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(" "),
-        mentorFeedback: r.review_comment || ""
+        rawStatus,
+        status: IDEA_STAGE_LABELS[rawStatus] || rawStatus,
+        mentorFeedback: feedback
     };
 }
 
@@ -1800,7 +1822,7 @@ let ideasScope = "All";
 function ideaStatusBadgeClass(status) {
     if (status === "Accepted" || status === "Approved") return "badge-accepted";
     if (status === "Rejected" || status === "Declined") return "badge-rejected";
-    if (status === "Needs Revision") return "badge-pending";
+    if (status === "Needs Revision" || status === "With Mentors") return "badge-pending";
     return "badge-pending";
 }
 
@@ -1818,6 +1840,9 @@ function renderIdeasScopeChips() {
 
 function renderMyIdeas() {
     let ideas = getStudentIdeas();
+    // Other students' ideas only appear once a mentor has accepted them.
+    // My own ideas always show, at whatever stage they're at.
+    ideas = ideas.filter((i) => isMyIdea(i) || i.rawStatus === "accepted");
     if (ideasScope === "Mine") {
         ideas = ideas.filter(isMyIdea);
     }
@@ -1839,7 +1864,7 @@ function renderMyIdeas() {
         const mine = isMyIdea(idea);
         const who = mine ? "you" : idea.studentName;
         const feedback = idea.mentorFeedback
-            ? `<p class="idea-text" style="margin-top:8px;"><strong>Faculty feedback:</strong> ${idea.mentorFeedback}</p>`
+            ? `<p class="idea-text" style="margin-top:8px;"><strong>Feedback:</strong> ${idea.mentorFeedback}</p>`
             : "";
         return `
             <div class="interest-row">
