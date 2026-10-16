@@ -317,6 +317,24 @@ async function loadProjectsFromSupabase() {
         floatedByName: project.created_by || ""
     }));
 
+    // Population cap lives in its own optional column. Fetch it separately so a
+    // missing column (migration not run yet) can never break project loading.
+    try {
+        const { data: capRows, error: capError } = await window.supabaseClient
+            .from("projects")
+            .select("project_code, population_cap");
+
+        if (!capError && capRows) {
+            const capByCode = new Map(capRows.map((r) => [r.project_code, r.population_cap]));
+            SUPABASE_PROJECTS.forEach((p) => {
+                const cap = capByCode.get(p.id);
+                if (cap) p.populationCap = cap;
+            });
+        }
+    } catch (e) {
+        console.warn("population_cap not available yet:", e);
+    }
+
     SUPABASE_PROJECTS_LOADED = true;
 
     console.log("Projects loaded from Supabase:", SUPABASE_PROJECTS);
