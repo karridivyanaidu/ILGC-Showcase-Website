@@ -1843,21 +1843,20 @@ function slugify(title) {
 }
 
 async function loadFormTags() {
-    // Real project tags from Supabase (tags table). Tolerates id column being tag_id or id.
+    // The Project Tags list IS the project_domains table, so whatever the
+    // faculty add/edit/delete there shows up here automatically - nothing hardcoded.
     const { data, error } = await window.supabaseClient
-        .from("tags")
-        .select("*")
+        .from("project_domains")
+        .select("domain_id, name")
         .order("name");
 
     if (error) {
         console.error("Could not load project tags:", error);
         return [];
     }
-    return (data || []).map((t) => ({
-        id: t.tag_id ?? t.id,
-        name: t.name,
-        domainId: t.domain_id || null
-    })).filter((t) => t.id && t.name);
+    return (data || [])
+        .filter((t) => t.domain_id && t.name)
+        .map((t) => ({ id: t.domain_id, name: t.name }));
 }
 
 async function openCreateProjectModal() {
@@ -1937,8 +1936,8 @@ async function openCreateProjectModal() {
         // Short unique code, e.g. MP4K9QZ
         const projectCode = "MP" + Date.now().toString(36).toUpperCase().slice(-5);
 
-        // The project's domain comes from its tags (each tag belongs to a domain).
-        const domainId = (selectedTags.find((t) => t.domainId) || {}).domainId || null;
+        // Main domain = first selected tag; ALL selected tags are linked below.
+        const domainId = selectedTags.length ? selectedTags[0].id : null;
 
         const baseRow = {
             project_code: projectCode,
@@ -1972,19 +1971,12 @@ async function openCreateProjectModal() {
             return;
         }
 
-        // Link the domain and this mentor (students' Discover tab reads these).
-        if (domainId) {
+        // Link every selected tag + this mentor (students' Discover tab reads these).
+        if (selectedTags.length) {
             const { error: mapError } = await window.supabaseClient
                 .from("project_domain_map")
-                .insert({ project_code: projectCode, domain_id: domainId });
-            if (mapError) console.error("Could not link project domain:", mapError);
-        }
-
-        if (selectedTags.length) {
-            const { error: tagError } = await window.supabaseClient
-                .from("project_tags")
-                .insert(selectedTags.map((t) => ({ project_code: projectCode, tag_id: t.id })));
-            if (tagError) console.error("Could not save project tags:", tagError);
+                .insert(selectedTags.map((t) => ({ project_code: projectCode, domain_id: t.id })));
+            if (mapError) console.error("Could not link project tags:", mapError);
         }
 
         const { error: mentorError } = await window.supabaseClient
