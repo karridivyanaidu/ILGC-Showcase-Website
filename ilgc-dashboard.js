@@ -53,6 +53,126 @@ async function loadMentorName() {
 let mentorGroups = [];
 let mentorInterestData = [];
 
+/* ======================================================
+   SHAREPOINT WORKSPACES — SUPABASE
+   Read-only access for assigned project mentors
+====================================================== */
+
+let mentorSharePointData = new Map();
+
+async function loadMentorSharePointData() {
+    mentorSharePointData = new Map();
+
+    // 1. Find projects assigned to the logged-in mentor.
+    const { data: assignments, error: assignmentError } =
+        await window.supabaseClient
+            .from("project_mentors")
+            .select("project_code")
+            .eq("mentor_email", userId);
+
+    if (assignmentError) {
+        console.error(
+            "Could not load SharePoint project assignments:",
+            assignmentError
+        );
+        return;
+    }
+
+    const projectCodes = [
+        ...new Set(
+            (assignments || [])
+                .map((row) => row.project_code)
+                .filter(Boolean)
+        )
+    ];
+
+    if (projectCodes.length === 0) return;
+
+    // 2. Load workspaces for assigned projects only.
+    const { data: workspaces, error: workspaceError } =
+        await window.supabaseClient
+            .from("project_workspaces")
+            .select(`
+                workspace_id,
+                project_code,
+                workspace_name,
+                workspace_url,
+                provider,
+                created_by,
+                created_at,
+                updated_at
+            `)
+            .in("project_code", projectCodes);
+
+    if (workspaceError) {
+        console.error(
+            "Could not load SharePoint workspaces:",
+            workspaceError
+        );
+        return;
+    }
+
+    if (!workspaces || workspaces.length === 0) return;
+
+    // 3. Load reports belonging to those workspaces.
+    const workspaceIds = workspaces
+        .map((workspace) => workspace.workspace_id)
+        .filter(Boolean);
+
+    let files = [];
+
+    if (workspaceIds.length > 0) {
+        const { data: fileRows, error: filesError } =
+            await window.supabaseClient
+                .from("workspace_files")
+                .select(`
+                    file_id,
+                    workspace_id,
+                    title,
+                    note,
+                    file_url,
+                    file_name,
+                    file_type,
+                    file_size,
+                    added_by,
+                    added_at
+                `)
+                .in("workspace_id", workspaceIds)
+                .order("added_at", {
+                    ascending: false
+                });
+
+        if (filesError) {
+            console.error(
+                "Could not load SharePoint reports:",
+                filesError
+            );
+        } else {
+            files = fileRows || [];
+        }
+    }
+
+    // 4. Cache workspaces by their real project_code.
+    workspaces.forEach((workspace) => {
+        mentorSharePointData.set(
+            workspace.project_code,
+            {
+                workspace,
+                files: files.filter(
+                    (file) =>
+                        file.workspace_id ===
+                        workspace.workspace_id
+                )
+            }
+        );
+    });
+
+    console.log(
+        "SharePoint workspaces loaded for assigned projects:",
+        [...mentorSharePointData.keys()]
+    );
+}
+
 async function loadMentorGroups() {
     console.log("Loading groups for mentor:", userId);
 
@@ -931,39 +1051,147 @@ function openGroupDetailModal(projectId) {
         <div class="modal-team">${reportsHtml}</div>
 
         <p class="modal-section-label">SharePoint — shared reports</p>
-        ${ilgcSharePointViewHtml(project.id)}
+        ${ilgcSharePointViewHtml(project.id, project.title)}
     `;
 
     modalOverlay.classList.remove("hidden");
 }
 
 /* Read-only view of a project's student-created SharePoint workspace. */
-function ilgcSharePointViewHtml(projectId) {
-    const sp = getSharePoint(projectId);
+/* ======================================================
+   READ-ONLY SHAREPOINT VIEW FOR PROJECT MENTORS
+====================================================== */
 
-    if (!sp) {
-        return `<p class="modal-text">The team hasn't created a SharePoint workspace for this project yet.</p>`;
-    }
-    if (!sp.files.length) {
-        return `<p class="modal-text">SharePoint created, but no reports have been posted yet.</p>`;
+function ilgcSharePointViewHtml(projectId, projectTitle = "") {
+    // Resolve the database project code.
+    let projectCode = String(projectId || "");
+
+    let sharePoint =
+        mentorSharePointData.get(projectCode);
+
+    // If the displayed project's ID differs from its
+    // database project_code, match against loaded projects.
+    if (!sharePoint && projectTitle) {
+        const matchingGroup = mentorGroups.find(
+            (group) =>
+                group.title === projectTitle
+        );
+
+        if (matchingGroup) {
+            projectCode = matchingGroup.projectCode;
+
+            sharePoint =
+                mentorSharePointData.get(projectCode);
+        }
     }
 
-    return `<div class="sp-view-list">${sp.files.map((f) => {
-        const date = new Date(f.addedAt).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-        const linkHtml = f.link
-            ? `<a class="sp-view-link" href="${f.link}" target="_blank" rel="noopener">Open report ↗</a>`
-            : `<span class="sp-view-nolink">No file link</span>`;
+    // Never use localStorage as a fallback.
+    if (!sharePoint) {
+        return `
+            <p class="modal-text">
+                No SharePoint workspace is available for this project.
+            </p>
+        `;
+    }
+
+    const { workspace, files } = sharePoint;
+
+    const esc = (value) =>
+        String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+
+    const workspaceLink = workspace.workspace_url
+        ? `
+            <p class="modal-text">
+                <a
+                    class="sp-view-link"
+                    href="${esc(workspace.workspace_url)}"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    Open SharePoint workspace ↗
+                </a>
+            </p>
+        `
+        : "";
+
+    if (!files.length) {
+        return `
+            ${workspaceLink}
+
+            <p class="modal-text">
+                The workspace exists, but no reports have been posted yet.
+            </p>
+        `;
+    }
+
+    const filesHtml = files.map((file) => {
+        const date = file.added_at
+            ? new Date(file.added_at).toLocaleDateString(
+                "en-IN",
+                {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric"
+                }
+            )
+            : "";
+
+        const linkHtml = file.file_url
+            ? `
+                <a
+                    class="sp-view-link"
+                    href="${esc(file.file_url)}"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                >
+                    Open report ↗
+                </a>
+            `
+            : `
+                <span class="sp-view-nolink">
+                    No file link
+                </span>
+            `;
+
         return `
             <div class="sp-view-item">
                 <div>
-                    <p class="sp-view-title">${f.title}</p>
-                    ${f.note ? `<p class="sp-view-note">${f.note}</p>` : ""}
-                    <p class="sp-view-meta">Added by ${f.addedBy} · ${date}</p>
+                    <p class="sp-view-title">
+                        ${esc(file.title)}
+                    </p>
+
+                    ${
+                        file.note
+                            ? `
+                                <p class="sp-view-note">
+                                    ${esc(file.note)}
+                                </p>
+                            `
+                            : ""
+                    }
+
+                    <p class="sp-view-meta">
+                        Added by ${esc(file.added_by || "Student")}
+                        ${date ? ` · ${esc(date)}` : ""}
+                    </p>
                 </div>
+
                 ${linkHtml}
             </div>
         `;
-    }).join("")}</div>`;
+    }).join("");
+
+    return `
+        ${workspaceLink}
+        <div class="sp-view-list">
+            ${filesHtml}
+        </div>
+    `;
 }
 
 
@@ -2129,6 +2357,9 @@ async function renderAll() {
     await loadMentorGroups();
     await loadMentorInterests();
     await loadProposals();
+
+    // Load shared workspaces and reports from Supabase.
+    await loadMentorSharePointData();
 
     renderProposalsDomainFilter();
     renderHome();
