@@ -2300,6 +2300,21 @@ let ideasFilter = "All";
 
 function ideaStatusLabel(status) {
 
+    // Friendlier labels for the Student -> Faculty -> Mentor workflow
+    const friendly = {
+        pending: "Pending",
+        approved: "With mentors",
+        accepted: "Accepted by mentor",
+        needs_revision: "Mentor requested changes",
+        rejected: "Rejected"
+    };
+
+    const key = String(status || "pending").toLowerCase();
+
+    if (friendly[key]) {
+        return friendly[key];
+    }
+
     return String(status || "pending")
         .split(/[_\s]+/)
         .map((w) =>
@@ -2550,7 +2565,7 @@ function drawIdeas() {
 
             approve.type = "button";
             approve.className = "btn btn-primary";
-            approve.textContent = "Approve";
+            approve.textContent = "Yes \u2014 send to mentors";
             approve.addEventListener(
                 "click",
                 () => reviewIdea(idea.id, "approved")
@@ -2561,7 +2576,7 @@ function drawIdeas() {
 
             reject.type = "button";
             reject.className = "btn btn-danger";
-            reject.textContent = "Reject";
+            reject.textContent = "No \u2014 reject";
             reject.addEventListener(
                 "click",
                 () => reviewIdea(idea.id, "rejected")
@@ -2616,7 +2631,7 @@ async function reviewIdea(id, status) {
 
     showToast(
         status === "approved"
-            ? "Idea approved."
+            ? "Idea approved and sent to the mentors."
             : "Idea rejected."
     );
 
