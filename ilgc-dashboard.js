@@ -53,6 +53,7 @@ async function loadMentorName() {
 let mentorGroups = [];
 let mentorInterestData = [];
 let deletedProjectRows = [];
+let archivedProjectRows = [];
 
 async function loadMentorGroups() {
     console.log("Loading groups for mentor:", userId);
@@ -261,7 +262,11 @@ async function loadMentorGroups() {
     // Projects recorded in deleted_projects are hidden from My Groups.
     const deleted = await loadDeletedProjectRows();
     const deletedCodes = new Set((deleted || []).map((row) => String(row.original_project_id)));
-    mentorGroups = mentorGroups.filter((group) => !deletedCodes.has(String(group.projectCode)));
+    const archived = await loadArchivedProjectRows();
+    const archivedCodes = new Set((archived || []).map((row) => String(row.original_project_id)));
+    mentorGroups = mentorGroups.filter((group) =>
+        !deletedCodes.has(String(group.projectCode)) && !archivedCodes.has(String(group.projectCode))
+    );
 
     console.log("Final mentor groups:", mentorGroups);
 }
@@ -628,7 +633,11 @@ function goToTab(tabName) {
     });
 }
 
-tabButtons.forEach((btn) => btn.addEventListener("click", () => { goToTab(btn.dataset.tab); if (btn.dataset.tab === "deleted") renderDeletedProjects(); }));
+tabButtons.forEach((btn) => btn.addEventListener("click", () => {
+    goToTab(btn.dataset.tab);
+    if (btn.dataset.tab === "deleted") renderDeletedProjects();
+    if (btn.dataset.tab === "archived") renderArchivedProjects();
+}));
 if (notifBtn) {
     notifBtn.addEventListener("click", () => goToTab(notifBtn.dataset.tab));
 }
@@ -897,6 +906,100 @@ async function restoreDeletedProject(rowId) {
 }
 
 /* ======================================================
+   ARCHIVE / RESTORE PROJECTS
+====================================================== */
+
+async function loadArchivedProjectRows() {
+    const { data, error } = await window.supabaseClient
+        .from("archived_projects")
+        .select("id, original_project_id, project_data, archived_at")
+        .order("archived_at", { ascending: false });
+    if (error) {
+        console.error("Could not load archived projects:", error);
+        archivedProjectRows = [];
+        return [];
+    }
+    archivedProjectRows = data || [];
+    return archivedProjectRows;
+}
+
+async function archiveMentorProject(projectCode) {
+    const code = String(projectCode);
+    const project = mentorGroups.find((g) => String(g.projectCode) === code);
+    if (!project) return;
+    if (!window.confirm(`Archive "${project.title}"? It will move to Archived Projects and can be restored later.`)) return;
+
+    const { data: projectRow, error: projectError } = await window.supabaseClient
+        .from("projects").select("*").eq("project_code", projectCode).maybeSingle();
+    if (projectError || !projectRow) {
+        console.error("Could not read project before archiving:", projectError);
+        showToast("Could not load project details. Nothing was archived.");
+        return;
+    }
+    const sessionResult = await window.supabaseClient.auth.getUser();
+    const authUserId = sessionResult?.data?.user?.id || null;
+    const { error: saveError } = await window.supabaseClient.from("archived_projects").insert({
+        original_project_id: code,
+        project_data: projectRow,
+        archived_by: authUserId
+    });
+    if (saveError) {
+        console.error("Could not save archived project snapshot:", saveError);
+        showToast("Archive failed. Check archived_projects RLS policies and table setup.");
+        return;
+    }
+    mentorGroups = mentorGroups.filter((g) => String(g.projectCode) !== code);
+    renderGroups();
+    await renderArchivedProjects();
+    showToast("Project moved to Archived Projects.");
+}
+
+async function renderArchivedProjects() {
+    const grid = document.getElementById("archivedProjectsGrid");
+    const empty = document.getElementById("archivedProjectsEmpty");
+    if (!grid || !empty) return;
+    const rows = await loadArchivedProjectRows();
+    if (!rows.length) { grid.innerHTML = ""; empty.classList.remove("hidden"); return; }
+    empty.classList.add("hidden");
+    grid.innerHTML = rows.map((row) => {
+        const p = row.project_data || {};
+        const title = p.title || `Project ${row.original_project_id}`;
+        const date = row.archived_at ? new Date(row.archived_at).toLocaleDateString() : "";
+        return `<article class="group-card mentor-project-card">
+          <div class="group-card-top"><span class="project-code">${escapeHtml(row.original_project_id)}</span><span class="badge">Archived</span></div>
+          <div class="group-card-body"><h3 class="group-title">${escapeHtml(title)}</h3><p class="project-meta">Archived ${date}</p>${p.description ? `<p class="project-description">${escapeHtml(p.description)}</p>` : ""}</div>
+          <div class="group-card-actions"><button class="btn btn-secondary" type="button" data-project-unarchive="${row.id}">Restore to My Groups</button></div>
+        </article>`;
+    }).join("");
+}
+
+async function restoreArchivedProject(rowId) {
+    if (!archivedProjectRows.some((item) => item.id === rowId)) await loadArchivedProjectRows();
+    const selected = archivedProjectRows.find((item) => item.id === rowId);
+    if (!selected?.project_data) { showToast("Could not find the archived project snapshot."); return; }
+    const snapshot = { ...selected.project_data };
+    const { project_code, ...updateFields } = snapshot;
+    const { data: existing, error: findError } = await window.supabaseClient.from("projects")
+        .select("project_code").eq("project_code", selected.original_project_id).maybeSingle();
+    if (findError) { showToast("Could not check the original project."); return; }
+    let restoreError = null;
+    if (existing) {
+        const result = await window.supabaseClient.from("projects").update(updateFields).eq("project_code", selected.original_project_id);
+        restoreError = result.error;
+    } else {
+        const result = await window.supabaseClient.from("projects").insert(snapshot);
+        restoreError = result.error;
+    }
+    if (restoreError) { console.error("Archive restore failed:", restoreError); showToast("Restore failed. Check projects table permissions."); return; }
+    const { error: removeError } = await window.supabaseClient.from("archived_projects").delete().eq("id", rowId);
+    if (removeError) { console.error(removeError); showToast("Project restored, but its archive record could not be cleared."); return; }
+    await renderAll();
+    await renderArchivedProjects();
+    goToTab("groups");
+    showToast("Project restored to My Groups.");
+}
+
+/* ======================================================
    RENDER: MY GROUPS
 ====================================================== */
 
@@ -975,6 +1078,7 @@ function renderGroups() {
                 </div>
 
                 <div class="group-card-actions">
+                    <button class="btn btn-secondary" type="button" data-project-archive="${String(group.projectCode).replace(/"/g, '&quot;')}">Archive project</button>
                     <button class="btn btn-danger" type="button" data-project-delete="${String(group.projectCode).replace(/"/g, '&quot;')}">Delete project</button>
                 </div>
 
@@ -2291,8 +2395,12 @@ const addReportBtnEl = document.getElementById("addReportBtn");
 if (addReportBtnEl) addReportBtnEl.remove();
 
 document.addEventListener("click", (e) => {
+    const archiveBtn = e.target.closest("[data-project-archive]");
+    if (archiveBtn) { archiveMentorProject(archiveBtn.dataset.projectArchive); return; }
     const deleteBtn = e.target.closest("[data-project-delete]");
     if (deleteBtn) { deleteMentorProject(deleteBtn.dataset.projectDelete); return; }
+    const unarchiveBtn = e.target.closest("[data-project-unarchive]");
+    if (unarchiveBtn) { restoreArchivedProject(unarchiveBtn.dataset.projectUnarchive); return; }
     const restoreBtn = e.target.closest("[data-project-restore]");
     if (restoreBtn) { restoreDeletedProject(restoreBtn.dataset.projectRestore); return; }
     const gotoBtn = e.target.closest("[data-goto]");
@@ -2362,6 +2470,7 @@ async function renderAll() {
     renderHome();
     renderGroups();
     await renderDeletedProjects();
+    await renderArchivedProjects();
     renderInterest();
     renderProposals();
     renderReports();
