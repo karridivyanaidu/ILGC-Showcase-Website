@@ -325,3 +325,9 @@
     font-size: 14px;
     line-height: 1.6;
 }
+
+
+/* Delete-project action */
+.group-card-actions { display:flex; justify-content:flex-end; gap:10px; padding:0 22px 18px; }
+.btn-danger { border:1px solid #b42318; background:#fff; color:#b42318; border-radius:8px; padding:9px 14px; font:inherit; font-weight:700; cursor:pointer; }
+.btn-danger:hover { background:#fff1f0; }
