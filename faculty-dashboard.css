@@ -858,3 +858,29 @@
     font-size: 12.5px;
     font-style: italic;
 }
+
+
+/* =====================================================
+   ARCHIVE / DELETE (faculty My Projects + Archived/Deleted tabs)
+===================================================== */
+
+/* Details / Archive / Delete sit on one row, and wrap on narrow cards */
+.project-card-actions {
+    flex-wrap: wrap;
+}
+
+.project-card-actions .btn {
+    min-width: 92px;
+}
+
+/* Muted badge on the Archived / Deleted project cards */
+#view-archived .badge,
+#view-deleted .badge {
+    background: #EEF3F2;
+    color: #5B7A76;
+}
+
+#view-archived .project-card,
+#view-deleted .project-card {
+    opacity: 0.92;
+}
