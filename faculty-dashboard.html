@@ -45,6 +45,8 @@
     <nav class="tabs" id="tabs">
       <button class="tab" data-tab="home" data-active="true">Dashboard</button>
       <button class="tab" data-tab="projects">My Projects</button>
+      <button class="tab" data-tab="archived">Archived Projects</button>
+      <button class="tab" data-tab="deleted">Deleted Projects</button>
       <button class="tab" data-tab="discover">Discover Projects</button>
       <button class="tab" data-tab="ideas">Student Ideas</button>
       <button class="tab" data-tab="reports">Project Reports</button>
@@ -118,6 +120,32 @@
 
     </div>
 
+  </section>
+
+  <!-- ============ ARCHIVED PROJECTS ============ -->
+  <section class="view" id="view-archived">
+    <div class="view-container">
+      <div class="view-heading">
+        <p class="eyebrow">PROJECT MANAGEMENT</p>
+        <h1>Archived Projects</h1>
+        <p class="view-subtitle">Projects archived by mentors or faculty. They are hidden from students. Restore one to make it active again.</p>
+      </div>
+      <div class="project-grid" id="archivedProjectsGrid"></div>
+      <p id="archivedProjectsEmpty" class="empty-state hidden">No archived projects.</p>
+    </div>
+  </section>
+
+  <!-- ============ DELETED PROJECTS ============ -->
+  <section class="view" id="view-deleted">
+    <div class="view-container">
+      <div class="view-heading">
+        <p class="eyebrow">PROJECT MANAGEMENT</p>
+        <h1>Deleted Projects</h1>
+        <p class="view-subtitle">Projects deleted by mentors or faculty. They are hidden from students. Restore one to bring it back.</p>
+      </div>
+      <div class="project-grid" id="deletedProjectsGrid"></div>
+      <p id="deletedProjectsEmpty" class="empty-state hidden">No deleted projects.</p>
+    </div>
   </section>
 
   <!-- ============ STUDENT IDEAS ============ -->
