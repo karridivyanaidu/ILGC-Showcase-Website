@@ -3531,6 +3531,214 @@ document.addEventListener("click", (event) => {
 });
 
 
+/* ======================================================
+   FLOAT NEW PROJECT (ILGC faculty)
+   Saves to Supabase, so the project shows up in this faculty's
+   My Projects AND in every student's Discover Projects tab.
+====================================================== */
+
+async function loadFloatProjectTags() {
+    // Tags = the project_domains table (same list as the Project Tags page).
+    const { data, error } = await window.supabaseClient
+        .from("project_domains")
+        .select("domain_id, name")
+        .order("name");
+
+    if (error) {
+        console.error("Could not load project tags:", error);
+        return [];
+    }
+    return (data || []).filter((t) => t.domain_id && t.name);
+}
+
+async function openFloatProjectModal() {
+
+    const tags = await loadFloatProjectTags();
+
+    const tagPickerHtml = tags.length
+        ? `<div style="display:flex;flex-wrap:wrap;gap:8px;">
+               ${tags.map((t) => `
+                   <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid #D7E5E3;border-radius:999px;font-size:13px;cursor:pointer;">
+                       <input type="checkbox" name="fpTag" value="${facEsc(t.domain_id)}"> ${facEsc(t.name)}
+                   </label>`).join("")}
+           </div>
+           <p class="field-hint">Pick every tag that fits this project.</p>`
+        : `<p class="field-hint">No project tags exist yet — add some under Project Tags.</p>`;
+
+    modalBody.innerHTML = `
+        <p class="modal-eyebrow">NEW PROJECT</p>
+        <h2 class="modal-title">Float a Project</h2>
+
+        <form id="floatProjectForm">
+
+            <div class="modal-field">
+                <label for="fpTitle">Project name</label>
+                <input type="text" id="fpTitle" required placeholder="e.g. Smart Campus Water Metering">
+            </div>
+
+            <div class="modal-field">
+                <label>Project tags</label>
+                ${tagPickerHtml}
+            </div>
+
+            <div class="modal-field">
+                <label for="fpStatus">Status</label>
+                <select id="fpStatus">
+                    <option value="Proposed">Proposed</option>
+                    <option value="Ongoing">Ongoing</option>
+                    <option value="Completed">Completed</option>
+                </select>
+            </div>
+
+            <div class="modal-field">
+                <label for="fpSemester">Semester (optional)</label>
+                <select id="fpSemester">
+                    <option value="">—</option>
+                    ${[1, 2, 3, 4, 5, 6, 7, 8].map((n) => `<option value="${n}">${n}</option>`).join("")}
+                </select>
+            </div>
+
+            <div class="modal-field">
+                <label for="fpSummary">Summary</label>
+                <textarea id="fpSummary" required placeholder="What is this project about?"></textarea>
+            </div>
+
+            <div class="modal-field">
+                <label for="fpOutcome">Expected outcome</label>
+                <textarea id="fpOutcome" placeholder="What does success look like?"></textarea>
+            </div>
+
+            <div class="modal-field">
+                <label for="fpCap">Population cap (optional)</label>
+                <input type="number" id="fpCap" min="1" step="1" placeholder="e.g. 5">
+                <p class="field-hint">The maximum number of students this project can take.</p>
+            </div>
+
+            <div class="modal-actions">
+                <button type="submit" class="btn btn-primary">Float Project</button>
+            </div>
+
+        </form>
+    `;
+
+    modalOverlay.classList.remove("hidden");
+
+    document
+        .getElementById("floatProjectForm")
+        .addEventListener("submit", (event) => submitFloatProject(event, tags));
+}
+
+async function submitFloatProject(event, tags) {
+
+    event.preventDefault();
+
+    const submitBtn = event.target.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Saving…";
+
+    const resetBtn = () => {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Float Project";
+    };
+
+    const title = document.getElementById("fpTitle").value.trim();
+    const status = document.getElementById("fpStatus").value;
+    const semester = parseInt(document.getElementById("fpSemester").value, 10) || null;
+    const summary = document.getElementById("fpSummary").value.trim();
+    const outcome = document.getElementById("fpOutcome").value.trim();
+    const capRaw = parseInt(document.getElementById("fpCap").value, 10);
+    const populationCap = capRaw > 0 ? capRaw : null;
+
+    const selectedIds = [...document.querySelectorAll('input[name="fpTag"]:checked')].map((c) => c.value);
+    const selectedTags = tags.filter((t) => selectedIds.includes(String(t.domain_id)));
+
+    // Short unique project code, e.g. FP4K9QZ
+    const projectCode = "FP" + Date.now().toString(36).toUpperCase().slice(-5);
+
+    const baseRow = {
+        project_code: projectCode,
+        title,
+        description: summary,
+        summary,
+        expected_outcome: outcome,
+        domain_id: selectedTags.length ? selectedTags[0].domain_id : null,
+        status: status.toLowerCase(),
+        progress: status === "Completed" ? 100 : status === "Ongoing" ? 10 : 0,
+        academic_year: String(new Date().getFullYear()),
+        semester,
+        created_by: facultyEmail
+    };
+
+    // Try with the population cap; if that column isn't added yet, retry without it.
+    let insertRow = populationCap ? { ...baseRow, population_cap: populationCap } : baseRow;
+    let { error } = await window.supabaseClient.from("projects").insert(insertRow);
+
+    if (error && populationCap && (error.code === "42703" || error.code === "PGRST204")) {
+        ({ error } = await window.supabaseClient.from("projects").insert(baseRow));
+    }
+
+    if (error) {
+        console.error("Could not float project:", error);
+        alert("Could not create the project. Check the browser console for details.");
+        resetBtn();
+        return;
+    }
+
+    // Tags -> project_domain_map (what students' Discover tab reads)
+    if (selectedTags.length) {
+        const { error: mapError } = await window.supabaseClient
+            .from("project_domain_map")
+            .insert(selectedTags.map((t) => ({ project_code: projectCode, domain_id: t.domain_id })));
+        if (mapError) console.error("Could not link project tags:", mapError);
+    }
+
+    // Link this faculty member as the project's mentor => it appears in My Projects.
+    // mentor_role may be required in some setups, so try a few safe values.
+    let linkError = null;
+    for (const role of [undefined, "Lead", "Mentor"]) {
+        const row = { project_code: projectCode, mentor_email: facultyEmail };
+        if (role) row.mentor_role = role;
+
+        const { error: err } = await window.supabaseClient.from("project_mentors").insert(row);
+        linkError = err;
+        if (!err) break;
+    }
+
+    if (linkError) {
+        console.error("Could not link faculty to project:", linkError);
+        alert("The project was created, but it could not be linked to your account, so it may not show in My Projects. Check the console.");
+    }
+
+    // Reload the faculty data so the new project appears straight away.
+    let allProjects = await loadAllProjects();
+    allProjects = await loadProjectDomains(allProjects);
+    allProjects = await loadProjectMentors(allProjects);
+
+    let myProjects = await loadMyProjects();
+    myProjects = await loadProjectDomains(myProjects);
+    myProjects = await loadProjectMentors(myProjects);
+
+    allProjectsData = allProjects;
+    myProjectsData = myProjects;
+
+    myProjectMembersData = await loadProjectTeamMembers(myProjectsData);
+    allProjectMembersData = await loadProjectTeamMembers(allProjectsData);
+
+    renderProjectsChips();
+    renderProjectsSemesterFilter();
+    renderHome();
+    renderMyProjects();
+    renderDiscover();
+
+    closeModal();
+    showToast("Project floated — it's now in My Projects and visible to all students ✓");
+}
+
+document
+    .getElementById("floatProjectBtn")
+    ?.addEventListener("click", openFloatProjectModal);
+
+
 async function initializeFacultyDashboard() {
 
     console.log(
