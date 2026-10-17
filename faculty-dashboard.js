@@ -129,6 +129,24 @@ async function loadFacultyProfile() {
    LOAD PROJECTS
 ====================================================== */
 
+// Codes of archived / deleted projects (rows in archived_projects / deleted_projects).
+async function loadHiddenProjectCodes() {
+    const hidden = new Set();
+    for (const table of ["deleted_projects", "archived_projects"]) {
+        try {
+            const { data, error } = await window.supabaseClient
+                .from(table)
+                .select("original_project_id");
+            if (!error && data) {
+                data.forEach((row) => hidden.add(String(row.original_project_id)));
+            }
+        } catch (e) {
+            console.warn(`Could not read ${table}:`, e);
+        }
+    }
+    return hidden;
+}
+
 async function loadAllProjects() {
 
     const { data, error } =
@@ -156,7 +174,8 @@ async function loadAllProjects() {
         return [];
     }
 
-    return data || [];
+    const hidden = await loadHiddenProjectCodes();
+    return (data || []).filter((p) => !hidden.has(String(p.project_code)));
 }
 
 
@@ -224,7 +243,8 @@ async function loadMyProjects() {
         return [];
     }
 
-    return projects || [];
+    const hidden = await loadHiddenProjectCodes();
+    return (projects || []).filter((p) => !hidden.has(String(p.project_code)));
 }
 
 
@@ -924,6 +944,9 @@ function goToTab(tabName) {
                 "notifications"
             );
     }
+
+    if (tabName === "archived") renderFacultyArchived();
+    if (tabName === "deleted") renderFacultyDeleted();
 }
 
 
@@ -1179,6 +1202,20 @@ function projectCardHtml(project) {
                         data-open="${project.id}"
                     >
                         Details
+                    </button>
+
+                    <button
+                        class="btn btn-secondary"
+                        data-fac-archive="${project.id}"
+                    >
+                        Archive
+                    </button>
+
+                    <button
+                        class="btn btn-danger"
+                        data-fac-delete="${project.id}"
+                    >
+                        Delete
                     </button>
 
                 </div>
@@ -3280,6 +3317,219 @@ if (sidebarToggleBtn) {
 /* ======================================================
    INITIALIZE
 ====================================================== */
+
+/* ======================================================
+   ARCHIVE / DELETE / RESTORE PROJECTS
+   Shared with the mentor portal through the archived_projects and
+   deleted_projects tables, so all portals stay in sync.
+====================================================== */
+
+function facEsc(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+const FAC_LIFECYCLE = {
+    archived: {
+        table: "archived_projects",
+        dateCol: "archived_at",
+        byCol: "archived_by",
+        label: "Archived",
+        gridId: "archivedProjectsGrid",
+        emptyId: "archivedProjectsEmpty"
+    },
+    deleted: {
+        table: "deleted_projects",
+        dateCol: "deleted_at",
+        byCol: "deleted_by",
+        label: "Deleted",
+        gridId: "deletedProjectsGrid",
+        emptyId: "deletedProjectsEmpty"
+    }
+};
+
+let facLifecycleRows = { archived: [], deleted: [] };
+
+async function loadFacultyLifecycleRows(kind) {
+    const cfg = FAC_LIFECYCLE[kind];
+    const { data, error } = await window.supabaseClient
+        .from(cfg.table)
+        .select(`id, original_project_id, project_data, ${cfg.dateCol}`)
+        .order(cfg.dateCol, { ascending: false });
+
+    if (error) {
+        console.error(`Could not load ${kind} projects:`, error);
+        facLifecycleRows[kind] = [];
+        return [];
+    }
+    facLifecycleRows[kind] = data || [];
+    return facLifecycleRows[kind];
+}
+
+async function renderFacultyLifecycle(kind) {
+    const cfg = FAC_LIFECYCLE[kind];
+    const grid = document.getElementById(cfg.gridId);
+    const empty = document.getElementById(cfg.emptyId);
+    if (!grid || !empty) return;
+
+    const rows = await loadFacultyLifecycleRows(kind);
+
+    if (!rows.length) {
+        grid.innerHTML = "";
+        empty.classList.remove("hidden");
+        return;
+    }
+
+    empty.classList.add("hidden");
+    grid.innerHTML = rows.map((row) => {
+        const p = row.project_data || {};
+        const title = p.title || `Project ${row.original_project_id}`;
+        const date = row[cfg.dateCol] ? new Date(row[cfg.dateCol]).toLocaleDateString() : "";
+        return `
+            <article class="project-card">
+                <div class="project-card-top">
+                    <span class="project-domain">${facEsc(row.original_project_id)}</span>
+                    <span class="badge">${cfg.label}</span>
+                </div>
+                <div class="project-card-body">
+                    <h3 class="project-title">${facEsc(title)}</h3>
+                    <p class="progress-label">${cfg.label} ${facEsc(date)}</p>
+                    ${p.description ? `<p class="project-description">${facEsc(p.description)}</p>` : ""}
+                    <div class="project-card-actions">
+                        <button class="btn btn-primary" type="button"
+                            data-fac-restore="${kind}" data-fac-restore-id="${facEsc(row.id)}">
+                            Restore
+                        </button>
+                    </div>
+                </div>
+            </article>`;
+    }).join("");
+}
+
+function renderFacultyArchived() { return renderFacultyLifecycle("archived"); }
+function renderFacultyDeleted() { return renderFacultyLifecycle("deleted"); }
+
+async function moveFacultyProject(kind, projectCode) {
+    const cfg = FAC_LIFECYCLE[kind];
+    const code = String(projectCode);
+    const project = myProjectsData.find((p) => String(p.project_code) === code);
+    const title = project?.title || code;
+
+    const question = kind === "archived"
+        ? `Archive "${title}"? It will be hidden from students and can be restored later.`
+        : `Move "${title}" to Deleted Projects? It will be hidden from students and can be restored later.`;
+    if (!window.confirm(question)) return;
+
+    const { data: projectRow, error: readError } = await window.supabaseClient
+        .from("projects")
+        .select("*")
+        .eq("project_code", code)
+        .maybeSingle();
+
+    if (readError || !projectRow) {
+        console.error("Could not read project:", readError);
+        alert("Could not load the project details. Nothing was changed.");
+        return;
+    }
+
+    const sessionResult = await window.supabaseClient.auth.getUser();
+    const authUserId = sessionResult?.data?.user?.id || null;
+
+    const { error: saveError } = await window.supabaseClient
+        .from(cfg.table)
+        .insert({
+            original_project_id: code,
+            project_data: projectRow,
+            [cfg.byCol]: authUserId
+        });
+
+    if (saveError) {
+        console.error(`Could not save to ${cfg.table}:`, saveError);
+        alert(`Could not ${kind === "archived" ? "archive" : "delete"} this project. Run project_lifecycle_migration.sql in Supabase first.`);
+        return;
+    }
+
+    myProjectsData = myProjectsData.filter((p) => String(p.project_code) !== code);
+    allProjectsData = allProjectsData.filter((p) => String(p.project_code) !== code);
+
+    renderHome();
+    renderMyProjects();
+    renderDiscover();
+}
+
+async function restoreFacultyProject(kind, rowId) {
+    const cfg = FAC_LIFECYCLE[kind];
+
+    if (!facLifecycleRows[kind].some((r) => String(r.id) === String(rowId))) {
+        await loadFacultyLifecycleRows(kind);
+    }
+    const selected = facLifecycleRows[kind].find((r) => String(r.id) === String(rowId));
+
+    if (!selected?.project_data) {
+        alert("Could not find the saved project snapshot.");
+        return;
+    }
+
+    const snapshot = { ...selected.project_data };
+    const { project_code, ...updateFields } = snapshot;
+
+    const { data: existing, error: findError } = await window.supabaseClient
+        .from("projects")
+        .select("project_code")
+        .eq("project_code", selected.original_project_id)
+        .maybeSingle();
+
+    if (findError) {
+        alert("Could not check the original project.");
+        return;
+    }
+
+    const result = existing
+        ? await window.supabaseClient.from("projects").update(updateFields).eq("project_code", selected.original_project_id)
+        : await window.supabaseClient.from("projects").insert(snapshot);
+
+    if (result.error) {
+        console.error("Restore failed:", result.error);
+        alert("Restore failed. Check the projects table permissions.");
+        return;
+    }
+
+    const { error: removeError } = await window.supabaseClient
+        .from(cfg.table)
+        .delete()
+        .eq("id", rowId);
+
+    if (removeError) {
+        console.error(removeError);
+        alert("The project was restored, but its record could not be cleared.");
+    }
+
+    // Reload so the restored project comes back with all its details.
+    window.location.reload();
+}
+
+document.addEventListener("click", (event) => {
+    const archiveBtn = event.target.closest("[data-fac-archive]");
+    if (archiveBtn) {
+        moveFacultyProject("archived", archiveBtn.dataset.facArchive);
+        return;
+    }
+
+    const deleteBtn = event.target.closest("[data-fac-delete]");
+    if (deleteBtn) {
+        moveFacultyProject("deleted", deleteBtn.dataset.facDelete);
+        return;
+    }
+
+    const restoreBtn = event.target.closest("[data-fac-restore]");
+    if (restoreBtn) {
+        restoreFacultyProject(restoreBtn.dataset.facRestore, restoreBtn.dataset.facRestoreId);
+    }
+});
+
 
 async function initializeFacultyDashboard() {
 
