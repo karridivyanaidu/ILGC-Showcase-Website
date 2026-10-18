@@ -2505,9 +2505,14 @@ rejectInterest(studentEmail, projectCode);
    RENDER ALL / INIT
 ====================================================== */
 
+
 async function renderAll() {
     await loadMentorName();
     await loadMentorGroups();
+
+    // Load student SharePoint workspaces and report links
+    await loadMentorSharePointData();
+
     await loadMentorInterests();
     await loadProposals();
 
@@ -2529,3 +2534,4 @@ renderProposalsChips();
 renderProposalsDomainFilter();
 renderReportsChips();
 renderAll();
+
